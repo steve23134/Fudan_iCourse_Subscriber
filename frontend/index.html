@@ -850,6 +850,14 @@
         <span x-text="mediaStats ? ((mediaStats.cap_mb || 800) + ' MB 上限') : ''"></span>
       </div>
       <p class="text-[11px] text-gray-400 mt-1" x-text="repoStatsText"></p>
+      <div class="storage-bar mt-2">
+        <div class="storage-bar-fill bg-gray-400"
+             :style="'width:' + repoUsagePercent + '%'"></div>
+      </div>
+      <div class="flex justify-between text-[11px] text-gray-400 mt-1">
+        <span>GitHub 仓库（含历史）</span>
+        <span>约 1 GB 预算</span>
+      </div>
 
       <div class="grid grid-cols-2 gap-3 mt-4">
         <div>
