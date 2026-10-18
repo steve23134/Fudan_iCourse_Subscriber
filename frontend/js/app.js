@@ -943,8 +943,8 @@ document.addEventListener("alpine:init", () => {
         return;
       }
       var target = Number(this.pruneTargetMb);
-      if (!target || target < 100 || target > 2000) {
-        this._toast("目标大小请输入 100–2000 MB", "error");
+      if (!target || target < 10 || target > 2000) {
+        this._toast("目标大小请输入 10–2000 MB", "error");
         return;
       }
       this.pruneTriggering = true;
