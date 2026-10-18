@@ -33,10 +33,6 @@ on:
         required: false
         default: "2"
         type: string
-  push:
-    branches:
-      - feat/media-viewer
-
 permissions:
   contents: write
 
@@ -81,10 +77,6 @@ jobs:
         run: |
           COURSE_TITLE="${{ inputs.course_title }}"
           LIMIT="${{ inputs.limit }}"
-          if [ "${{ github.event_name }}" = "push" ]; then
-            COURSE_TITLE="哲学导论"
-            LIMIT=1
-          fi
           if [ -z "$LIMIT" ]; then LIMIT=0; fi
           python -u scripts/backfill_media.py \
             --db data/icourse.db \

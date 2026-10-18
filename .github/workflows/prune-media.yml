@@ -18,10 +18,6 @@ on:
         required: false
         default: false
         type: boolean
-  push:
-    branches:
-      - feat/media-viewer
-
 permissions:
   contents: write
 
@@ -65,7 +61,7 @@ jobs:
           MEDIA_BRANCH: media
         run: |
           DRY_RUN_FLAG=""
-          if [ "${{ github.event_name }}" = "push" ] || [ "${{ inputs.dry_run }}" = "true" ]; then
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
             DRY_RUN_FLAG="--dry-run"
           fi
           TARGET_MB="${{ inputs.target_mb }}"
@@ -81,7 +77,7 @@ jobs:
             --force-prune $DRY_RUN_FLAG
 
       - name: Deploy database to data branch
-        if: ${{ github.event_name != 'push' && inputs.dry_run != true }}
+        if: ${{ inputs.dry_run != true }}
         env:
           STUID: ${{ secrets.STUID }}
           UISPSW: ${{ secrets.UISPSW }}
