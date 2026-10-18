@@ -112,6 +112,12 @@ def main() -> None:
             f"remaining={plan.remaining_bytes / 1024 / 1024:.1f}MB "
             f"target_reached={plan.target_reached}"
         )
+        if not plan.target_reached:
+            print(
+                "[Media] WARNING: target not reached; protected recent "
+                "lectures or shared blobs remain. Lower --keep-recent or "
+                "raise --target-mb."
+            )
         apply_prune_plan(
             db, plan, client, args.media_dir, dry_run=args.dry_run,
         )
