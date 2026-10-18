@@ -180,6 +180,34 @@ def build_prune_plan(
                 int(p.get("page_num") or 0),
             ),
         )
+        # Prefer deleting a whole lecture.  A lecture is a coherent reading
+        # unit; leaving a few random pages behind is worse than removing it.
+        lecture_counts = Counter(
+            p["img_sha"] for p in pages if p.get("img_sha")
+        )
+        lecture_freed = 0
+        for sha, count in lecture_counts.items():
+            if ref_count[sha] - count <= 0:
+                lecture_freed += media_sizes.get(sha, 0)
+        # Avoid deleting a 30 MB lecture just to free 2 MB.  Whole-lecture
+        # removal is preferred when the overshoot is modest.
+        if (remaining - lecture_freed <= target_bytes
+                and remaining - lecture_freed
+                >= target_bytes - 8 * 1024 * 1024):
+            for page in pages:
+                sha = page.get("img_sha")
+                evict_pages.append(page)
+                if not sha:
+                    continue
+                ref_count[sha] -= 1
+                if ref_count[sha] <= 0 and sha not in delete_shas:
+                    delete_shas.add(sha)
+                    freed += media_sizes.get(sha, 0)
+                    remaining -= media_sizes.get(sha, 0)
+            continue
+
+        # Deleting the whole lecture would overshoot too far (or its blobs
+        # are shared); fall back to oldest pages within this lecture.
         for page in pages:
             if remaining <= target_bytes:
                 break
