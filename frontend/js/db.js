@@ -137,13 +137,22 @@ async function _attachShard(shardBytes) {
 }
 
 function _deriveState(row) {
+  if (row.has_content === undefined) {
+    row.has_content = !!(
+      row.has_summary || row.has_transcript || row.has_ppt
+      || (row.summary && String(row.summary).trim())
+      || (row.transcript && String(row.transcript).trim())
+    );
+  }
+  // Any one of summary / transcript / PPT OCR is valid readable content.
+  // A lecture must not be disabled just because the recording is missing.
+  if (row.has_content) return "ready";
   // "no_video" is a soft error stage the backend records when the lecture
   // has no playable video yet (it retries a few runs in case the recording
   // appears later).  Render it as a gray informational badge, not a red
   // failure.
   if (row.error_stage === "no_video") return "novideo";
   if (row.error_stage) return "failed";
-  if (row.summary && row.processed_at) return "ready";
   // Processed, no summary, no error = a lecture the backend permanently
   // skipped (no audio stream / empty transcript) and marked done.
   // Distinct from "waiting" (enqueued, not yet run) so these don't show
@@ -165,13 +174,30 @@ function _queryAll(sql, params) {
 
 function _getCourses() {
   return _queryAll(`
-    SELECT c.course_id AS course_id, c.title AS title, c.teacher AS teacher,
-           COUNT(CASE WHEN l.summary IS NOT NULL THEN 1 END) AS summary_count,
-           COUNT(l.sub_id) AS total_count,
-           MAX(l.processed_at) AS last_updated
-    FROM courses c
-    LEFT JOIN lectures l ON c.course_id = l.course_id
-    GROUP BY c.course_id
+    SELECT * FROM (
+      SELECT c.course_id AS course_id, c.title AS title, c.teacher AS teacher,
+             COUNT(CASE WHEN l.summary IS NOT NULL
+                         AND TRIM(l.summary) != '' THEN 1 END) AS summary_count,
+             COUNT(CASE WHEN l.transcript IS NOT NULL
+                         AND TRIM(l.transcript) != '' THEN 1 END) AS transcript_count,
+             COUNT(CASE WHEN EXISTS(
+                   SELECT 1 FROM ppt_pages pp
+                   WHERE pp.sub_id = l.sub_id AND pp.ocr_status = 'done'
+                     AND pp.text IS NOT NULL AND TRIM(pp.text) != ''
+                 ) THEN 1 END) AS ppt_count,
+             COUNT(CASE WHEN (l.summary IS NOT NULL AND TRIM(l.summary) != '')
+                         OR (l.transcript IS NOT NULL AND TRIM(l.transcript) != '')
+                         OR EXISTS(
+                              SELECT 1 FROM ppt_pages pp
+                              WHERE pp.sub_id = l.sub_id AND pp.ocr_status = 'done'
+                                AND pp.text IS NOT NULL AND TRIM(pp.text) != ''
+                            ) THEN 1 END) AS content_count,
+             COUNT(l.sub_id) AS total_count,
+             MAX(COALESCE(l.processed_at, l.date)) AS last_updated
+      FROM courses c
+      LEFT JOIN lectures l ON c.course_id = l.course_id
+      GROUP BY c.course_id
+    ) WHERE content_count > 0
     ORDER BY last_updated DESC NULLS LAST
   `);
 }
@@ -196,9 +222,18 @@ function _lectureOrderKey(subTitle) {
 
 function _getLectures(courseId) {
   const rows = _queryAll(`
-    SELECT sub_id, sub_title, date, summary, processed_at,
-           error_stage, error_msg, summary_model, transcript
-    FROM lectures WHERE course_id = ?
+    SELECT l.sub_id, l.sub_title, l.date, l.summary, l.processed_at,
+           l.error_stage, l.error_msg, l.summary_model, l.transcript,
+           CASE WHEN l.summary IS NOT NULL AND TRIM(l.summary) != ''
+                THEN 1 ELSE 0 END AS has_summary,
+           CASE WHEN l.transcript IS NOT NULL AND TRIM(l.transcript) != ''
+                THEN 1 ELSE 0 END AS has_transcript,
+           CASE WHEN EXISTS(
+                 SELECT 1 FROM ppt_pages pp
+                 WHERE pp.sub_id = l.sub_id AND pp.ocr_status = 'done'
+                   AND pp.text IS NOT NULL AND TRIM(pp.text) != ''
+               ) THEN 1 ELSE 0 END AS has_ppt
+    FROM lectures l WHERE l.course_id = ?
   `, [courseId]);
   // Chronological ascending (earliest first); 第N-M节 breaks intra-day ties so
   // a morning session sorts before an afternoon one. Lectures with no parseable
@@ -215,6 +250,7 @@ function _getLectures(courseId) {
     return ka.raw < kb.raw ? -1 : (ka.raw > kb.raw ? 1 : 0);
   });
   return rows.map((r) => {
+    r.has_content = !!(r.has_summary || r.has_transcript || r.has_ppt);
     r.state = _deriveState(r);
     delete r.transcript;
     return r;
@@ -223,11 +259,23 @@ function _getLectures(courseId) {
 
 function _getLecture(subId) {
   const rows = _queryAll(`
-    SELECT l.*, c.title AS course_title, c.teacher
+    SELECT l.*, c.title AS course_title, c.teacher,
+           CASE WHEN l.summary IS NOT NULL AND TRIM(l.summary) != ''
+                THEN 1 ELSE 0 END AS has_summary,
+           CASE WHEN l.transcript IS NOT NULL AND TRIM(l.transcript) != ''
+                THEN 1 ELSE 0 END AS has_transcript,
+           CASE WHEN EXISTS(
+                 SELECT 1 FROM ppt_pages pp
+                 WHERE pp.sub_id = l.sub_id AND pp.ocr_status = 'done'
+                   AND pp.text IS NOT NULL AND TRIM(pp.text) != ''
+               ) THEN 1 ELSE 0 END AS has_ppt
     FROM lectures l JOIN courses c ON l.course_id = c.course_id
     WHERE l.sub_id = ?
   `, [subId]);
   if (!rows.length) return null;
+  rows[0].has_content = !!(
+    rows[0].has_summary || rows[0].has_transcript || rows[0].has_ppt
+  );
   rows[0].state = _deriveState(rows[0]);
   return rows[0];
 }
@@ -236,10 +284,12 @@ function _getPptPages(subId) {
   // Only return done pages with non-empty text — keeps the PPT viewer
   // free of pending placeholders and dropped pages.
   return _queryAll(`
-    SELECT page_num, created_sec, text
+    SELECT page_num, created_sec, text, pptimgurl,
+           img_sha, img_mime, img_width, img_height, img_bytes,
+           media_evicted_at
     FROM ppt_pages
     WHERE sub_id = ? AND ocr_status = 'done'
-      AND text IS NOT NULL AND text != ''
+      AND text IS NOT NULL AND TRIM(text) != ''
     ORDER BY created_sec ASC
   `, [subId]);
 }

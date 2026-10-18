@@ -119,9 +119,60 @@ def merge(local_path: str, remote_path: str):
             # row is already in the remote DB, whatever wrote it owns it.
             conn.execute("""
                 INSERT OR IGNORE INTO main.ppt_pages
-                    (sub_id, page_num, created_sec, pptimgurl, text, ocr_status, ocr_at, dhash)
-                SELECT sub_id, page_num, created_sec, pptimgurl, text, ocr_status, ocr_at, dhash
+                    (sub_id, page_num, created_sec, pptimgurl, text,
+                     ocr_status, ocr_at, dhash, img_sha, img_mime,
+                     img_width, img_height, img_bytes,
+                     media_updated_at, media_evicted_at)
+                SELECT sub_id, page_num, created_sec, pptimgurl, text,
+                       ocr_status, ocr_at, dhash, img_sha, img_mime,
+                       img_width, img_height, img_bytes,
+                       media_updated_at, media_evicted_at
                 FROM local.ppt_pages
+            """)
+
+            # 5) PPT media fields: backfill/prune runs update existing rows
+            #    without touching OCR text.  The newer media_updated_at wins
+            #    so a concurrent backfill or prune is not silently lost.
+            conn.execute("""
+                UPDATE main.ppt_pages SET
+                    img_sha = CASE
+                        WHEN l.media_updated_at IS NOT NULL
+                         AND (main.ppt_pages.media_updated_at IS NULL
+                              OR l.media_updated_at > main.ppt_pages.media_updated_at)
+                        THEN l.img_sha ELSE main.ppt_pages.img_sha END,
+                    img_mime = CASE
+                        WHEN l.media_updated_at IS NOT NULL
+                         AND (main.ppt_pages.media_updated_at IS NULL
+                              OR l.media_updated_at > main.ppt_pages.media_updated_at)
+                        THEN l.img_mime ELSE main.ppt_pages.img_mime END,
+                    img_width = CASE
+                        WHEN l.media_updated_at IS NOT NULL
+                         AND (main.ppt_pages.media_updated_at IS NULL
+                              OR l.media_updated_at > main.ppt_pages.media_updated_at)
+                        THEN l.img_width ELSE main.ppt_pages.img_width END,
+                    img_height = CASE
+                        WHEN l.media_updated_at IS NOT NULL
+                         AND (main.ppt_pages.media_updated_at IS NULL
+                              OR l.media_updated_at > main.ppt_pages.media_updated_at)
+                        THEN l.img_height ELSE main.ppt_pages.img_height END,
+                    img_bytes = CASE
+                        WHEN l.media_updated_at IS NOT NULL
+                         AND (main.ppt_pages.media_updated_at IS NULL
+                              OR l.media_updated_at > main.ppt_pages.media_updated_at)
+                        THEN l.img_bytes ELSE main.ppt_pages.img_bytes END,
+                    media_updated_at = CASE
+                        WHEN l.media_updated_at IS NOT NULL
+                         AND (main.ppt_pages.media_updated_at IS NULL
+                              OR l.media_updated_at > main.ppt_pages.media_updated_at)
+                        THEN l.media_updated_at ELSE main.ppt_pages.media_updated_at END,
+                    media_evicted_at = CASE
+                        WHEN l.media_updated_at IS NOT NULL
+                         AND (main.ppt_pages.media_updated_at IS NULL
+                              OR l.media_updated_at > main.ppt_pages.media_updated_at)
+                        THEN l.media_evicted_at ELSE main.ppt_pages.media_evicted_at END
+                FROM local.ppt_pages l
+                WHERE main.ppt_pages.sub_id = l.sub_id
+                  AND main.ppt_pages.page_num = l.page_num
             """)
 
             # 6) all_courses (catalog): upsert local rows into remote.  We take

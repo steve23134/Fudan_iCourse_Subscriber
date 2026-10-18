@@ -176,6 +176,15 @@ DATA_DIR = os.environ.get("DATA_DIR", "data")
 VIDEO_DIR = os.path.join(DATA_DIR, "videos")
 AUDIO_DIR = os.path.join(DATA_DIR, "audio")  # ffmpeg-decoded f32le scratch buffers
 DB_PATH = os.environ.get("DB_PATH", os.path.join(DATA_DIR, "icourse.db"))
+MEDIA_DIR = os.path.join(DATA_DIR, "media")
+
+# Encrypted PPT screenshots live on a dedicated branch.  The cap applies to
+# the current branch tip (the precise, controllable number); GitHub's
+# repo-size API also includes history and may lag behind a prune.
+MEDIA_BRANCH = os.environ.get("MEDIA_BRANCH", "media")
+MEDIA_CAP_MB = _env_int("MEDIA_CAP_MB", 800)
+MEDIA_PRUNE_TARGET_MB = _env_int("MEDIA_PRUNE_TARGET_MB", 700)
+MEDIA_KEEP_RECENT = _env_int("MEDIA_KEEP_RECENT", 2)
 
 # Sherpa-onnx ASR model directory.  Default: SenseVoice (zh+en+ja+ko+yue, int8).
 # ASR_MODEL_DIR is the new name; SENSEVOICE_MODEL_DIR is the legacy env var

@@ -250,6 +250,10 @@ document.addEventListener("alpine:init", () => {
     courses: [], lectures: [],
     currentCourse: null, currentLecture: null,
     currentPptPages: [],
+    pptImageUrls: {}, pptImageErrors: {}, pptImageLoading: {},
+    lightboxUrl: null, pptObserver: null,
+    mediaStats: null, mediaStatsLoading: false,
+    pruneTargetMb: 700, pruneKeepRecent: 2, pruneTriggering: false,
     detailView: "summary",
     searchQuery: "", searchResults: [],
     searchCourseFilterQuery: "", searchSelectedCourseIds: [],
@@ -295,6 +299,9 @@ document.addEventListener("alpine:init", () => {
       const creds = _loadCreds();
       if (!creds) { this.view = "setup"; return; }
       await this._loadDB(creds);
+      window.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") this.lightboxUrl = null;
+      });
     },
 
     async _loadDB(creds) {
@@ -372,7 +379,16 @@ document.addEventListener("alpine:init", () => {
             this.lectures = ICS.db.getLectures(cid);
           }
         }
-        this.detailView = "summary";
+        this._revokePptUrls();
+        this.pptImageErrors = {};
+        this.pptImageLoading = {};
+        var available = this.availableDetailViews;
+        var wanted = params.view;
+        this.detailView = available.indexOf(wanted) !== -1
+          ? wanted : (available[0] || "summary");
+        if (this.detailView === "ppt") {
+          this.$nextTick(() => this.observePptImages());
+        }
       }
       this.view = view;
       if (view !== "lectures") this.exportDialogOpen = false;
@@ -395,7 +411,7 @@ document.addEventListener("alpine:init", () => {
     },
 
     openCourse(id) { this.navigate("lectures", { courseId: id }); },
-    openLecture(id) { this.navigate("detail", { subId: id }); },
+    openLecture(id, view) { this.navigate("detail", { subId: id, view: view }); },
 
     /* Prev/next within the current course's lecture list.  Lectures are
        ordered chronologically (parsed from sub_title; see db.js
@@ -450,18 +466,128 @@ document.addEventListener("alpine:init", () => {
 
     /* Three-state detail viewer.  The button shown to the user always
        advertises the *next* state so the label reads as an action. */
+    get availableDetailViews() {
+      if (!this.currentLecture) return [];
+      var views = [];
+      if (this.currentLecture.has_summary) views.push("summary");
+      if (this.currentLecture.has_transcript) views.push("transcript");
+      if (this.currentLecture.has_ppt) views.push("ppt");
+      return views;
+    },
+    switchDetailView(view) {
+      if (this.availableDetailViews.indexOf(view) === -1) return;
+      this.detailView = view;
+      if (view === "ppt") {
+        this.$nextTick(() => this.observePptImages());
+      }
+    },
     cycleDetailView() {
-      var idx = _DETAIL_VIEW_CYCLE.indexOf(this.detailView);
-      if (idx === -1) idx = 0;
-      this.detailView = _DETAIL_VIEW_CYCLE[(idx + 1) % _DETAIL_VIEW_CYCLE.length];
+      var views = this.availableDetailViews;
+      if (!views.length) return;
+      var idx = views.indexOf(this.detailView);
+      this.switchDetailView(views[(idx + 1) % views.length]);
     },
     nextDetailViewLabel() {
-      var idx = _DETAIL_VIEW_CYCLE.indexOf(this.detailView);
-      if (idx === -1) idx = 0;
-      var next = _DETAIL_VIEW_CYCLE[(idx + 1) % _DETAIL_VIEW_CYCLE.length];
+      var views = this.availableDetailViews;
+      if (!views.length) return "无内容";
+      var idx = views.indexOf(this.detailView);
+      var next = views[(idx + 1) % views.length];
       return "切换到" + _DETAIL_VIEW_LABEL[next];
     },
     formatPptTimestamp(sec) { return _formatTimestamp(sec); },
+
+    courseContentLabel(c) {
+      var parts = [];
+      if (c.summary_count) parts.push(c.summary_count + " 摘要");
+      if (c.transcript_count) parts.push(c.transcript_count + " 转录");
+      if (c.ppt_count) parts.push(c.ppt_count + " PPT");
+      return parts.length ? parts.join(" · ") : "暂无内容";
+    },
+    lectureContentLabel(lec) {
+      var parts = [];
+      if (lec.has_summary) parts.push("摘要");
+      if (lec.has_transcript) parts.push("转录");
+      if (lec.has_ppt) parts.push("PPT");
+      return parts.length ? parts.join(" + ") : "No Content";
+    },
+
+    async loadPptImage(page) {
+      var pageNum = Number(page.page_num);
+      if (!page.img_sha || this.pptImageUrls[pageNum]
+          || this.pptImageLoading[pageNum]) return;
+      this.pptImageLoading = Object.assign(
+        {}, this.pptImageLoading, { [pageNum]: true },
+      );
+      try {
+        var creds = _loadCreds();
+        if (!creds?.token) throw new Error("未登录或 PAT 缺失");
+        var cached = await _idbGet("media:" + page.img_sha);
+        var bytes = cached;
+        if (!bytes) {
+          var encrypted = await ICS.github.fetchBlobBytes(
+            this.repoOwner, this.repoName, page.img_sha, creds.token,
+          );
+          var password = await ICS.crypto.buildPasswordV2(creds);
+          bytes = await ICS.crypto.decrypt(
+            encrypted, password, ICS.crypto.NEW_ITERATIONS,
+          );
+          await _idbPut("media:" + page.img_sha, bytes);
+        }
+        var blob = new Blob(
+          [bytes], { type: page.img_mime || "image/jpeg" },
+        );
+        var url = URL.createObjectURL(blob);
+        this.pptImageUrls = Object.assign(
+          {}, this.pptImageUrls, { [pageNum]: url },
+        );
+      } catch (e) {
+        this.pptImageErrors = Object.assign(
+          {}, this.pptImageErrors,
+          { [pageNum]: e?.message || "截图加载失败" },
+        );
+      } finally {
+        var loading = Object.assign({}, this.pptImageLoading);
+        delete loading[pageNum];
+        this.pptImageLoading = loading;
+      }
+    },
+    observePptImages() {
+      if (this.pptObserver) {
+        this.pptObserver.disconnect();
+        this.pptObserver = null;
+      }
+      var pages = this.currentPptPages || [];
+      if (!pages.length) return;
+      if (typeof IntersectionObserver === "undefined") {
+        pages.forEach((p) => this.loadPptImage(p));
+        return;
+      }
+      var self = this;
+      this.pptObserver = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
+          if (!entry.isIntersecting) return;
+          var pageNum = Number(entry.target.getAttribute("data-page"));
+          var page = pages.find(
+            (p) => Number(p.page_num) === pageNum,
+          );
+          if (page) self.loadPptImage(page);
+          self.pptObserver.unobserve(entry.target);
+        });
+      }, { rootMargin: "300px 0px" });
+      document.querySelectorAll(".ppt-page-image").forEach(
+        (el) => this.pptObserver.observe(el),
+      );
+    },
+    openLightbox(url) {
+      if (url) this.lightboxUrl = url;
+    },
+    closeLightbox() { this.lightboxUrl = null; },
+    _revokePptUrls() {
+      Object.keys(this.pptImageUrls || {}).forEach((key) => {
+        try { URL.revokeObjectURL(this.pptImageUrls[key]); } catch (e) {}
+      });
+      this.pptImageUrls = {};
+    },
 
     getExportableLectures() {
       return (this.lectures || []).filter((lec) => lec.summary && lec.summary.trim());
@@ -727,6 +853,7 @@ document.addEventListener("alpine:init", () => {
       this.settingsForm = { ...(_loadCreds() || {}) };
       this.showSecrets = {};
       this.navigate("settings");
+      this.loadMediaStats();
     },
     async saveSettingsAndReload() {
       _saveCreds({ ...this.settingsForm });
@@ -735,8 +862,112 @@ document.addEventListener("alpine:init", () => {
       const c = _loadCreds();
       if (c) await this._loadDB(c);
     },
+
+    formatBytes(n) {
+      n = Number(n || 0);
+      if (n >= 1024 * 1024 * 1024) {
+        return (n / 1024 / 1024 / 1024).toFixed(2) + " GB";
+      }
+      if (n >= 1024 * 1024) {
+        return (n / 1024 / 1024).toFixed(1) + " MB";
+      }
+      if (n >= 1024) return (n / 1024).toFixed(1) + " KB";
+      return n + " B";
+    },
+    get mediaUsagePercent() {
+      if (!this.mediaStats) return 0;
+      var cap = Number(this.mediaStats.cap_mb || 800) * 1024 * 1024;
+      return Math.min(100, Number(this.mediaStats.media_bytes || 0) / cap * 100);
+    },
+    get repoUsagePercent() {
+      if (!this.mediaStats) return 0;
+      var bytes = Number(
+        this.mediaStats.repo_estimated_bytes
+        || (this.mediaStats.repo_size_kb || 0) * 1024
+      );
+      return Math.min(100, bytes / (1024 * 1024 * 1024) * 100);
+    },
+    get mediaStatsText() {
+      if (!this.mediaStats) return "尚未加载存储统计";
+      var s = this.mediaStats;
+      return this.formatBytes(s.media_bytes)
+        + " / " + (s.cap_mb || 800) + " MB · "
+        + (s.media_files || 0) + " 张截图 · "
+        + (s.lectures_with_media || 0) + " 节课";
+    },
+    get repoStatsText() {
+      if (!this.mediaStats) return "";
+      var s = this.mediaStats;
+      return "GitHub 报告仓库约 "
+        + this.formatBytes(s.repo_estimated_bytes
+            || (s.repo_size_kb || 0) * 1024)
+        + "（可能延迟）";
+    },
+    async loadMediaStats() {
+      if (this.mediaStatsLoading) return;
+      var creds = _loadCreds();
+      if (!creds?.token || !this.repoOwner || !this.repoName) return;
+      this.mediaStatsLoading = true;
+      try {
+        var stats = await ICS.github.fetchMediaStats(
+          this.repoOwner, this.repoName, creds.token, "media",
+        );
+        var repo = await ICS.github.fetchRepoInfo(
+          this.repoOwner, this.repoName, creds.token,
+        );
+        if (!stats) {
+          stats = {
+            media_bytes: 0, media_files: 0, cap_mb: 800,
+            target_mb: 700, keep_recent_per_course: 2,
+            lectures_with_media: 0,
+          };
+        }
+        stats.repo_size_kb = repo.sizeKb;
+        stats.repo_estimated_bytes = repo.sizeKb * 1024;
+        if (this.mediaStats === null) {
+          this.pruneTargetMb = stats.target_mb || 700;
+          this.pruneKeepRecent = stats.keep_recent_per_course ?? 2;
+        }
+        this.mediaStats = stats;
+      } catch (e) {
+        this._toast("读取存储统计失败：" + (e?.message || "unknown"), "error");
+      } finally {
+        this.mediaStatsLoading = false;
+      }
+    },
+    async triggerPrune() {
+      if (this.pruneTriggering) return;
+      var creds = _loadCreds();
+      if (!creds?.token) {
+        this._toast("未登录或 PAT 缺失", "error");
+        return;
+      }
+      var target = Number(this.pruneTargetMb);
+      if (!target || target < 100 || target > 2000) {
+        this._toast("目标大小请输入 100–2000 MB", "error");
+        return;
+      }
+      this.pruneTriggering = true;
+      try {
+        await ICS.github.triggerPruneWorkflow(
+          this.repoOwner, this.repoName, "main", creds.token,
+          target, this.pruneKeepRecent,
+        );
+        this._toast(
+          "已触发媒体清理，目标 " + target + " MB，完成后请刷新统计",
+          "success",
+        );
+        setTimeout(() => this.loadMediaStats(), 8000);
+      } catch (e) {
+        this._toast(e?.message || "清理触发失败", "error");
+      } finally {
+        this.pruneTriggering = false;
+      }
+    },
     clearAllData() {
       if (!confirm("Clear all saved credentials?")) return;
+      this._revokePptUrls();
+      this.lightboxUrl = null;
       localStorage.removeItem(_LS + "creds");
       localStorage.removeItem(_LS + "settings");
       // Close the cached connection before deleting — Chrome/Firefox block

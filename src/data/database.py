@@ -304,6 +304,87 @@ class Database:
                 (dhash, sub_id, page_num),
             )
 
+    def update_ppt_page_media(self, sub_id: str, page_num: int,
+                              img_sha: str, img_mime: str,
+                              img_width: int, img_height: int,
+                              img_bytes: int):
+        """Attach an encrypted screenshot blob to one OCR page."""
+        now = datetime.now().isoformat()
+        with self._lock, self.conn:
+            self.conn.execute(
+                """UPDATE ppt_pages
+                   SET img_sha = ?, img_mime = ?, img_width = ?,
+                       img_height = ?, img_bytes = ?, media_updated_at = ?,
+                       media_evicted_at = NULL
+                   WHERE sub_id = ? AND page_num = ?""",
+                (img_sha, img_mime, img_width, img_height, img_bytes,
+                 now, sub_id, page_num),
+            )
+
+    def clear_ppt_page_media(self, sub_id: str, page_num: int,
+                             evicted_at: str | None = None):
+        """Drop the media reference while keeping OCR text intact."""
+        evicted_at = evicted_at or datetime.now().isoformat()
+        with self._lock, self.conn:
+            self.conn.execute(
+                """UPDATE ppt_pages
+                   SET img_sha = NULL, img_mime = NULL, img_width = NULL,
+                       img_height = NULL, img_bytes = NULL,
+                       media_updated_at = ?, media_evicted_at = ?
+                   WHERE sub_id = ? AND page_num = ?""",
+                (evicted_at, evicted_at, sub_id, page_num),
+            )
+
+    def get_media_refs(self) -> list[dict]:
+        """All OCR pages that currently reference an encrypted screenshot."""
+        with self._lock:
+            rows = self.conn.execute(
+                """SELECT l.course_id, c.title AS course_title,
+                          l.sub_id, l.sub_title, l.date,
+                          pp.page_num, pp.created_sec, pp.img_sha,
+                          pp.img_bytes, pp.media_updated_at,
+                          pp.media_evicted_at
+                   FROM ppt_pages pp
+                   JOIN lectures l ON pp.sub_id = l.sub_id
+                   JOIN courses c ON l.course_id = c.course_id
+                   WHERE pp.img_sha IS NOT NULL AND pp.img_sha != ''
+                   ORDER BY l.date ASC, l.sub_id ASC, pp.created_sec ASC"""
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_ppt_pages_for_backfill(
+        self, course_id: str | None = None,
+        course_title: str | None = None,
+        sub_ids: list[str] | None = None,
+    ) -> list[dict]:
+        """Pages with usable OCR text but no current screenshot blob."""
+        query = """
+            SELECT l.course_id, c.title AS course_title,
+                   l.sub_id, l.sub_title, l.date,
+                   pp.page_num, pp.created_sec, pp.pptimgurl
+            FROM ppt_pages pp
+            JOIN lectures l ON pp.sub_id = l.sub_id
+            JOIN courses c ON l.course_id = c.course_id
+            WHERE pp.ocr_status = 'done'
+              AND pp.text IS NOT NULL AND pp.text != ''
+              AND (pp.img_sha IS NULL OR pp.media_evicted_at IS NOT NULL)
+        """
+        params: list = []
+        if course_id:
+            query += " AND l.course_id = ?"
+            params.append(str(course_id))
+        if course_title:
+            query += " AND c.title LIKE ?"
+            params.append(f"%{course_title}%")
+        if sub_ids:
+            placeholders = ",".join("?" * len(sub_ids))
+            query += f" AND l.sub_id IN ({placeholders})"
+            params.extend(str(s) for s in sub_ids)
+        query += " ORDER BY l.date ASC, l.sub_id ASC, pp.created_sec ASC"
+        with self._lock:
+            rows = self.conn.execute(query, params).fetchall()
+        return [dict(row) for row in rows]
+
     def insert_ppt_pages_pending(self, sub_id: str, items: list[dict]) -> int:
         """Bulk-insert PPT page rows with status='pending'.
 

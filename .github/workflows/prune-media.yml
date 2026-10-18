@@ -1,0 +1,105 @@
+name: Prune Media
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_mb:
+        description: "Prune the media branch tip down to this many MB"
+        required: true
+        default: "700"
+        type: string
+      keep_recent_per_course:
+        description: "Keep the newest N lectures per course"
+        required: true
+        default: "2"
+        type: string
+      dry_run:
+        description: "Only print the prune plan"
+        required: false
+        default: false
+        type: boolean
+  push:
+    branches:
+      - feat/media-viewer
+
+permissions:
+  contents: write
+
+concurrency:
+  group: media-maintenance
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Fetch database from data branch
+        run: |
+          mkdir -p data/sharded/shards
+          git fetch origin data --depth=1
+          git show origin/data:data/icourse-index.enc > data/sharded/icourse-index.enc
+          for path in $(git ls-tree -r --name-only origin/data | grep '^data/shards/'); do
+            git show "origin/data:$path" > "data/sharded/shards/$(basename "$path")"
+          done
+
+      - name: Reassemble database
+        env:
+          STUID: ${{ secrets.STUID }}
+          UISPSW: ${{ secrets.UISPSW }}
+        run: python scripts/db_shard.py reassemble data/sharded data/icourse.db
+
+      - name: Prune media
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MEDIA_BRANCH: media
+        run: |
+          DRY_RUN_FLAG=""
+          if [ "${{ github.event_name }}" = "push" ] || [ "${{ inputs.dry_run }}" = "true" ]; then
+            DRY_RUN_FLAG="--dry-run"
+          fi
+          python scripts/finalize_media.py \
+            --db data/icourse.db \
+            --media-dir data/media \
+            --cap-mb 800 \
+            --target-mb "${{ inputs.target_mb }}" \
+            --keep-recent "${{ inputs.keep_recent_per_course }}" \
+            --force-prune $DRY_RUN_FLAG
+
+      - name: Deploy database to data branch
+        if: ${{ inputs.dry_run != true }}
+        env:
+          STUID: ${{ secrets.STUID }}
+          UISPSW: ${{ secrets.UISPSW }}
+          COURSE_IDS: ${{ secrets.COURSE_IDS }}
+          SUBSCRIBED_COURSE_IDS: ${{ secrets.COURSE_IDS }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          rm -rf data/sharded_out
+          mkdir -p data/sharded_out
+          python scripts/db_shard.py shard data/icourse.db data/sharded_out
+
+          rm -rf /tmp/db_deploy
+          mkdir -p /tmp/db_deploy/data/shards
+          cp data/sharded_out/icourse-index.enc /tmp/db_deploy/data/
+          cp data/sharded_out/shards/*.db.gz.enc /tmp/db_deploy/data/shards/
+          cd /tmp/db_deploy
+
+          git init -q
+          git checkout -q -b data
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/
+          git commit -q -m "chore: prune encrypted PPT media"
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git"
+          git push --force origin data

@@ -115,6 +115,48 @@ async function _fetchShardManifest(owner, repo, branch, token) {
   };
 }
 
+async function _fetchRepoInfo(owner, repo, token) {
+  const res = await fetch(`${_GH_API}/repos/${owner}/${repo}`, {
+    headers: _ghHeaders(token),
+  });
+  if (!res.ok) throw new Error(`Failed to get repo info: ${res.status}`);
+  const data = await res.json();
+  return {
+    sizeKb: Number(data.size || 0),
+    private: !!data.private,
+  };
+}
+
+async function _fetchMediaStats(owner, repo, token, branch) {
+  // media-stats.json is a small, unencrypted JSON file on the media
+  // branch.  It contains sizes/counts only — never screenshot content.
+  let commitSha;
+  try {
+    commitSha = await _getLatestCommitSha(
+      owner, repo, branch || "media", token,
+    );
+  } catch (e) {
+    return null;
+  }
+  const commitRes = await fetch(
+    `${_GH_API}/repos/${owner}/${repo}/git/commits/${commitSha}`,
+    { headers: _ghHeaders(token) }
+  );
+  if (!commitRes.ok) return null;
+  const treeSha = (await commitRes.json()).tree.sha;
+  const treeRes = await fetch(
+    `${_GH_API}/repos/${owner}/${repo}/git/trees/${treeSha}?recursive=1`,
+    { headers: _ghHeaders(token) }
+  );
+  if (!treeRes.ok) return null;
+  const entry = (await treeRes.json()).tree.find(
+    (e) => e.path === "media-stats.json"
+  );
+  if (!entry) return null;
+  const bytes = await _fetchBlobBytes(owner, repo, entry.sha, token);
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+
 /* ── Actions secrets API ────────────────────────────────────────────────
    Reads/writes repository-level Action secrets.  The encryption is
    libsodium ``crypto_box_seal`` against a per-repo public key — same
@@ -317,12 +359,42 @@ async function _triggerExportWorkflow(
   throw new Error(`GitHub API error ${res.status}: ${body}`);
 }
 
+async function _triggerPruneWorkflow(
+  owner, repo, ref, token, targetMb, keepRecent
+) {
+  const url = `${_GH_API}/repos/${owner}/${repo}/actions/workflows/prune-media.yml/dispatches`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { ..._ghHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ref: ref || "main",
+      inputs: {
+        target_mb: String(targetMb || 700),
+        keep_recent_per_course: String(keepRecent ?? 2),
+        dry_run: "false",
+      },
+    }),
+  });
+  if (res.status === 204) return;
+  const body = await res.text();
+  if (res.status === 403 || res.status === 404) {
+    throw new Error(
+      "无法触发媒体清理 workflow。请确认 PAT 已开启 Actions: Read and write。" +
+      `服务端返回：${res.status} ${body}`
+    );
+  }
+  throw new Error(`GitHub API error ${res.status}: ${body}`);
+}
+
 window.ICS.github = {
   detectRepo: _detectRepo,
   getLatestCommitSha: _getLatestCommitSha,
   fetchBlobBytes: _fetchBlobBytes,
   fetchShardManifest: _fetchShardManifest,
+  fetchRepoInfo: _fetchRepoInfo,
+  fetchMediaStats: _fetchMediaStats,
   triggerExportWorkflow: _triggerExportWorkflow,
+  triggerPruneWorkflow: _triggerPruneWorkflow,
   triggerDeleteWorkflow: _triggerDeleteWorkflow,
   triggerSingleRunWorkflow: _triggerSingleRunWorkflow,
   getRepoPublicKey: _getRepoPublicKey,

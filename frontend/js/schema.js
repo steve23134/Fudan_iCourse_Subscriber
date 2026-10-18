@@ -37,6 +37,13 @@ CREATE TABLE IF NOT EXISTS ppt_pages (
     ocr_status TEXT NOT NULL DEFAULT 'pending',
     ocr_at TEXT,
     dhash TEXT,
+    img_sha TEXT,
+    img_mime TEXT,
+    img_width INTEGER,
+    img_height INTEGER,
+    img_bytes INTEGER,
+    media_updated_at TEXT,
+    media_evicted_at TEXT,
     PRIMARY KEY (sub_id, page_num)
 );
 CREATE TABLE IF NOT EXISTS all_courses (

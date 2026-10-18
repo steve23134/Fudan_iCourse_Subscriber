@@ -1,0 +1,124 @@
+name: Backfill Media
+
+on:
+  workflow_dispatch:
+    inputs:
+      course_id:
+        description: "Course ID (optional if course_title is set)"
+        required: false
+        default: ""
+        type: string
+      course_title:
+        description: "Course title filter, e.g. 哲学导论"
+        required: false
+        default: ""
+        type: string
+      sub_ids:
+        description: "Optional comma-separated lecture sub_ids"
+        required: false
+        default: ""
+        type: string
+      limit:
+        description: "Optional page limit for a test run (0 = all)"
+        required: false
+        default: "0"
+        type: string
+      target_mb:
+        description: "Prune media to this size after upload"
+        required: false
+        default: "700"
+        type: string
+      keep_recent_per_course:
+        description: "Keep the newest N lectures per course"
+        required: false
+        default: "2"
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: media-maintenance
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Fetch database from data branch
+        run: |
+          mkdir -p data/sharded/shards
+          git fetch origin data --depth=1
+          git show origin/data:data/icourse-index.enc > data/sharded/icourse-index.enc
+          for path in $(git ls-tree -r --name-only origin/data | grep '^data/shards/'); do
+            git show "origin/data:$path" > "data/sharded/shards/$(basename "$path")"
+          done
+
+      - name: Reassemble database
+        env:
+          STUID: ${{ secrets.STUID }}
+          UISPSW: ${{ secrets.UISPSW }}
+        run: python scripts/db_shard.py reassemble data/sharded data/icourse.db
+
+      - name: Backfill screenshots
+        env:
+          StuId: ${{ secrets.STUID }}
+          UISPsw: ${{ secrets.UISPSW }}
+        run: |
+          python -u scripts/backfill_media.py \
+            --db data/icourse.db \
+            --media-dir data/media \
+            --course-id "${{ inputs.course_id }}" \
+            --course-title "${{ inputs.course_title }}" \
+            --sub-ids "${{ inputs.sub_ids }}" \
+            --limit "${{ inputs.limit }}"
+
+      - name: Upload media and enforce cap
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MEDIA_BRANCH: media
+        run: |
+          python scripts/finalize_media.py \
+            --db data/icourse.db \
+            --media-dir data/media \
+            --cap-mb 800 \
+            --target-mb "${{ inputs.target_mb }}" \
+            --keep-recent "${{ inputs.keep_recent_per_course }}"
+
+      - name: Deploy database to data branch
+        env:
+          STUID: ${{ secrets.STUID }}
+          UISPSW: ${{ secrets.UISPSW }}
+          COURSE_IDS: ${{ secrets.COURSE_IDS }}
+          SUBSCRIBED_COURSE_IDS: ${{ secrets.COURSE_IDS }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          rm -rf data/sharded_out
+          mkdir -p data/sharded_out
+          python scripts/db_shard.py shard data/icourse.db data/sharded_out
+
+          rm -rf /tmp/db_deploy
+          mkdir -p /tmp/db_deploy/data/shards
+          cp data/sharded_out/icourse-index.enc /tmp/db_deploy/data/
+          cp data/sharded_out/shards/*.db.gz.enc /tmp/db_deploy/data/shards/
+          cd /tmp/db_deploy
+
+          git init -q
+          git checkout -q -b data
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/
+          git commit -q -m "chore: backfill encrypted PPT media"
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git"
+          git push --force origin data

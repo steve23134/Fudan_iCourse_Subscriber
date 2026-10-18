@@ -10,6 +10,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: media-maintenance
+  cancel-in-progress: false
+
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -199,6 +203,10 @@ jobs:
           DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MEDIA_BRANCH: media
+          MEDIA_CAP_MB: "800"
+          MEDIA_PRUNE_TARGET_MB: "700"
+          MEDIA_KEEP_RECENT: "2"
         run: |
           if [ ! -f data/icourse.db ]; then
             echo "No database file, skipping."
@@ -230,6 +238,15 @@ jobs:
             python scripts/merge_db.py data/icourse.db data/remote.db
             DEPLOY_DB=data/remote.db
           fi
+
+          # Upload new encrypted screenshots and enforce the media cap
+          # before the DB is re-sharded/pushed.
+          python scripts/finalize_media.py \
+            --db "$DEPLOY_DB" \
+            --media-dir data/media \
+            --cap-mb "$MEDIA_CAP_MB" \
+            --target-mb "$MEDIA_PRUNE_TARGET_MB" \
+            --keep-recent "$MEDIA_KEEP_RECENT"
 
           # Re-shard the merged DB and stage to a clean tree for force-push.
           rm -rf data/sharded_out

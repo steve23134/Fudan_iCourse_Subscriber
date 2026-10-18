@@ -277,7 +277,7 @@
             </div>
             <div class="flex flex-col items-end flex-shrink-0">
               <span class="text-xs font-medium bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full"
-                    x-text="c.summary_count + ' summaries'"></span>
+                    x-text="courseContentLabel(c)"></span>
               <span class="text-xs text-gray-400 mt-1" x-text="relTime(c.last_updated)"></span>
             </div>
           </div>
@@ -296,8 +296,8 @@
 
     <div class="space-y-2">
       <template x-for="lec in lectures" :key="lec.sub_id">
-        <button @click="lec.state === 'ready' && openLecture(lec.sub_id)"
-                :class="lec.state === 'ready' ? 'hover:shadow-md active:bg-gray-50 cursor-pointer' : 'opacity-60 cursor-default'"
+        <button @click="lec.has_content && openLecture(lec.sub_id)"
+                :class="lec.has_content ? 'hover:shadow-md active:bg-gray-50 cursor-pointer' : 'opacity-60 cursor-default'"
                 class="w-full text-left bg-white rounded-lg border border-gray-100 p-3.5 transition-shadow">
           <div class="flex items-center justify-between gap-2">
             <h4 class="font-medium text-gray-800 text-sm truncate" x-text="lec.sub_title || 'Untitled'"></h4>
@@ -309,7 +309,7 @@
                     'badge-skipped': lec.state === 'skipped',
                     'badge-failed': lec.state === 'failed'
                   }"
-                  x-text="lec.state === 'ready' ? 'Ready' :
+                  x-text="lec.state === 'ready' ? lectureContentLabel(lec) :
                           lec.state === 'processing' ? 'Summarizing…' :
                           lec.state === 'waiting' ? 'Waiting' :
                           lec.state === 'novideo' ? 'No Video' :
@@ -320,6 +320,10 @@
           <p x-show="lec.state === 'ready' && lec.summary"
              class="text-xs text-gray-400 mt-1.5 line-clamp-2"
              x-text="snippet(lec.summary, 100)"></p>
+          <p x-show="lec.state === 'ready' && !lec.summary && lec.has_ppt"
+             class="text-xs text-gray-400 mt-1.5">
+            PPT 识别内容可用，暂无摘要
+          </p>
           <!-- Error detail -->
           <p x-show="lec.state === 'failed' && lec.error_msg"
              class="text-xs text-red-400 mt-1 truncate" x-text="lec.error_msg"></p>
@@ -356,6 +360,34 @@
           </button>
         </nav>
 
+        <!-- Content tabs: only tabs with actual content are clickable. -->
+        <div class="flex flex-wrap gap-2 mb-4">
+          <button @click="switchDetailView('summary')"
+                  :disabled="!currentLecture.has_summary"
+                  class="px-3 py-1.5 rounded-lg text-sm font-medium disabled:opacity-40"
+                  :class="detailView === 'summary'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'">
+            摘要
+          </button>
+          <button @click="switchDetailView('transcript')"
+                  :disabled="!currentLecture.has_transcript"
+                  class="px-3 py-1.5 rounded-lg text-sm font-medium disabled:opacity-40"
+                  :class="detailView === 'transcript'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'">
+            转录
+          </button>
+          <button @click="switchDetailView('ppt')"
+                  :disabled="!currentLecture.has_ppt"
+                  class="px-3 py-1.5 rounded-lg text-sm font-medium disabled:opacity-40"
+                  :class="detailView === 'ppt'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'">
+            PPT 图文
+          </button>
+        </div>
+
         <!-- Summary -->
         <div x-show="detailView === 'summary'"
              class="prose"
@@ -369,18 +401,45 @@
              x-text="currentLecture.transcript || '（暂无转录文本）'">
         </div>
 
-        <!-- PPT OCR results — one block per kept page, with [页 N @ mm:ss] tag -->
+        <!-- PPT OCR + original screenshot, side by side on desktop. -->
         <div x-show="detailView === 'ppt'" class="space-y-5 text-sm">
           <p x-show="currentPptPages.length === 0" class="text-gray-400">
             暂无 PPT 识别数据。
           </p>
           <template x-for="page in currentPptPages" :key="page.page_num">
-            <div class="border-l-2 border-gray-200 pl-3">
-              <div class="text-xs text-gray-400 mb-1"
-                   x-text="'[页 ' + page.page_num + ' @ ' + formatPptTimestamp(page.created_sec) + ']'">
+            <div class="ppt-page-card">
+              <div class="ppt-image-col ppt-page-image" :data-page="page.page_num">
+                <div class="text-xs text-gray-400 mb-1"
+                     x-text="'[页 ' + page.page_num + ' @ ' + formatPptTimestamp(page.created_sec) + ']'">
+                </div>
+                <div x-show="!page.img_sha" class="ppt-image-placeholder">
+                  <span x-text="page.media_evicted_at
+                    ? '截图已清理，OCR 文本仍保留'
+                    : '该页暂无截图缓存，可在 Actions 中运行回填'"></span>
+                </div>
+                <div x-show="page.img_sha && !pptImageUrls[page.page_num]"
+                     class="ppt-image-placeholder">
+                  <span x-show="pptImageErrors[page.page_num]"
+                        x-text="pptImageErrors[page.page_num]"></span>
+                  <span x-show="pptImageLoading[page.page_num]">截图加载中…</span>
+                  <span x-show="!pptImageLoading[page.page_num] && !pptImageErrors[page.page_num]">
+                    滚动到此处加载截图
+                  </span>
+                </div>
+                <img x-show="pptImageUrls[page.page_num]"
+                     :src="pptImageUrls[page.page_num]"
+                     :alt="'PPT page ' + page.page_num"
+                     class="ppt-screenshot"
+                     loading="lazy"
+                     @click="openLightbox(pptImageUrls[page.page_num])">
+                <div x-show="page.img_width"
+                     class="text-[11px] text-gray-400 mt-1"
+                     x-text="page.img_width + ' × ' + page.img_height + ' · 点击查看原图'"></div>
               </div>
-              <pre class="whitespace-pre-wrap text-gray-700 font-sans"
-                   x-text="page.text || ''"></pre>
+              <div class="ppt-text-col">
+                <pre class="whitespace-pre-wrap text-gray-700 font-sans"
+                     x-text="page.text || ''"></pre>
+              </div>
             </div>
           </template>
         </div>
@@ -482,7 +541,10 @@
 
     <div class="space-y-2">
       <template x-for="r in searchResults" :key="r.sub_id">
-        <button @click="openLecture(r.sub_id)"
+        <button @click="openLecture(r.sub_id,
+                        r.hit_field === 'ocr' ? 'ppt'
+                        : r.hit_field === 'transcript' ? 'transcript'
+                        : 'summary')"
                 class="w-full text-left bg-white rounded-lg border border-gray-100 p-3 hover:shadow-md transition-shadow active:bg-gray-50">
           <div class="flex items-center justify-between gap-2">
             <p class="text-xs text-blue-600 font-medium truncate" x-text="r.course_title"></p>
@@ -770,6 +832,49 @@
       </div>
     </div>
 
+    <div class="mt-8 pt-6 border-t border-gray-200">
+      <div class="flex items-center justify-between">
+        <h2 class="text-lg font-bold text-gray-800">存储管理</h2>
+        <button @click="loadMediaStats()" :disabled="mediaStatsLoading"
+                class="text-xs text-blue-600 hover:text-blue-800 disabled:opacity-40"
+                x-text="mediaStatsLoading ? '读取中…' : '刷新'"></button>
+      </div>
+      <p class="text-xs text-gray-500 mt-1" x-text="mediaStatsText"></p>
+      <div class="storage-bar mt-3">
+        <div class="storage-bar-fill"
+             :class="mediaUsagePercent >= 95 ? 'bg-red-500' : mediaUsagePercent >= 80 ? 'bg-amber-500' : 'bg-blue-500'"
+             :style="'width:' + mediaUsagePercent + '%'"></div>
+      </div>
+      <div class="flex justify-between text-[11px] text-gray-400 mt-1">
+        <span x-text="mediaStats ? formatBytes(mediaStats.media_bytes) : '—'"></span>
+        <span x-text="mediaStats ? ((mediaStats.cap_mb || 800) + ' MB 上限') : ''"></span>
+      </div>
+      <p class="text-[11px] text-gray-400 mt-1" x-text="repoStatsText"></p>
+
+      <div class="grid grid-cols-2 gap-3 mt-4">
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">清理到 (MB)</label>
+          <input type="number" x-model.number="pruneTargetMb" min="100" max="2000"
+                 class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-300 focus:outline-none">
+        </div>
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">每门课保留最近</label>
+          <input type="number" x-model.number="pruneKeepRecent" min="0" max="20"
+                 class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-300 focus:outline-none">
+        </div>
+      </div>
+      <button @click="triggerPrune()" :disabled="pruneTriggering"
+              class="w-full mt-3 bg-amber-500 text-white py-2 rounded-lg text-sm font-medium hover:bg-amber-600 disabled:opacity-50 flex items-center justify-center gap-2">
+        <div x-show="pruneTriggering" class="spinner !w-4 !h-4 !border-2 !border-white/30 !border-t-white"></div>
+        <span x-text="pruneTriggering ? '触发中…' : '立即清理 media 分支'"></span>
+      </button>
+      <p class="text-[11px] text-gray-400 mt-2">
+        清理会从最旧的课次开始删除截图，保留 OCR 文本；之后可对课程重新运行 Backfill Media。
+      </p>
+      <p x-show="mediaStats?.last_prune_at" class="text-[11px] text-gray-400 mt-1"
+         x-text="'上次清理：' + (mediaStats?.last_prune_at || '') + (mediaStats?.last_prune_freed_bytes ? '，释放 ' + formatBytes(mediaStats.last_prune_freed_bytes) : '')"></p>
+    </div>
+
     <button @click="saveSettingsAndReload()"
             class="w-full mt-6 bg-blue-500 text-white py-2.5 rounded-lg font-medium hover:bg-blue-600">
       Save &amp; Reload
@@ -898,6 +1003,17 @@
       </button>
     </div>
   </div>
+</div>
+
+<!-- ── LIGHTBOX ── -->
+<div x-show="lightboxUrl" x-transition.opacity
+     class="lightbox"
+     @click.self="closeLightbox()">
+  <button @click="closeLightbox()"
+          class="absolute top-4 right-4 text-white/80 hover:text-white text-2xl leading-none">
+    ✕
+  </button>
+  <img :src="lightboxUrl" alt="PPT screenshot" class="lightbox-img">
 </div>
 
 <!-- ── TOAST ── -->

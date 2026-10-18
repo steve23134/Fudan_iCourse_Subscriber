@@ -49,6 +49,7 @@ from typing import TYPE_CHECKING
 from src.api import icourse
 from src.ai.ocr import ocr_image_text
 from src.ai.ppt_dedup import clean_ppt_text, compute_dhash, dedup_dhash, is_invalid_page, match_garbage
+from src.media.store import MediaStore
 
 if TYPE_CHECKING:
     from src.data.database import Database
@@ -87,9 +88,11 @@ class PPTAsyncHandle:
     def __init__(self, pipeline: "PPTPipeline", sub_id: str,
                  *, total: int, inserted: int,
                  futures: list[Future], dedupped: int, presubmit_failed: int,
-                 images: dict[int, bytes] | None = None):
+                 images: dict[int, bytes] | None = None,
+                 course_id: str = ""):
         self._pipeline = pipeline
         self._sub_id = sub_id
+        self._course_id = course_id
         self._total = total
         self._inserted = inserted
         self._futures = futures
@@ -116,7 +119,7 @@ class PPTAsyncHandle:
                 self._futures.append(
                     s.submit_ocr(
                         self._pipeline._ocr_worker,
-                        self._sub_id, page_num, img,
+                        self._course_id, self._sub_id, page_num, img,
                     )
                 )
             self._images = None  # release memory
@@ -156,6 +159,7 @@ class PPTPipeline:
         self._db = db
         self._scheduler = scheduler
         self._reporter = reporter
+        self._media_store = MediaStore()
         # OCR futures submitted by prefetch_and_ocr (runs during LLM wait).
         # Keyed by sub_id; submit() drains them before starting ASR if the
         # pre-submitted OCR hasn't completed yet.
@@ -197,7 +201,7 @@ class PPTPipeline:
             for page_num, img in images.items():
                 futures.append(
                     self._scheduler.submit_ocr(
-                        self._ocr_worker, sub_id, page_num, img,
+                        self._ocr_worker, course_id, sub_id, page_num, img,
                     )
                 )
             images = {}  # release memory; workers hold closures
@@ -210,6 +214,7 @@ class PPTPipeline:
             dedupped=c["dedupped"],
             presubmit_failed=c["failed"],
             images=images or None,
+            course_id=course_id,
         )
 
     def prefetch_and_ocr(self, client: "ICourseClient", course_id: str,
@@ -248,7 +253,9 @@ class PPTPipeline:
             if self._reporter:
                 self._reporter.ocr_progress_start(sub_id, len(images))
             self._prefetched_ocr[sub_id] = [
-                self._scheduler.submit_ocr(self._ocr_worker, sub_id, pn, img)
+                self._scheduler.submit_ocr(
+                    self._ocr_worker, course_id, sub_id, pn, img,
+                )
                 for pn, img in images.items()
             ]
         except Exception as e:
@@ -350,7 +357,7 @@ class PPTPipeline:
 
     # ── Worker ──────────────────────────────────────────────────────────
 
-    def _ocr_worker(self, sub_id: str, page_num: int,
+    def _ocr_worker(self, course_id: str, sub_id: str, page_num: int,
                     image_bytes: bytes) -> tuple[int, str]:
         """OCR one image, classify, persist. Returns (page_num, status).
 
@@ -377,6 +384,23 @@ class PPTPipeline:
         cleaned = clean_ppt_text(text)
         status = "invalid" if is_invalid_page(cleaned) else "done"
         self._db.update_ppt_page(sub_id, page_num, cleaned, status)
+        if status == "done" and cleaned.strip():
+            try:
+                media = self._media_store.save(image_bytes)
+                self._db.update_ppt_page_media(
+                    sub_id, page_num,
+                    img_sha=media["img_sha"],
+                    img_mime=media["img_mime"],
+                    img_width=media["img_width"],
+                    img_height=media["img_height"],
+                    img_bytes=media["img_bytes"],
+                )
+            except Exception as e:
+                print(
+                    f"      page {page_num}: media save failed "
+                    f"{type(e).__name__}: {e}",
+                    flush=True,
+                )
         if self._reporter:
             self._reporter.ocr_progress_tick(sub_id)
         return page_num, status
