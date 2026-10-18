@@ -128,9 +128,12 @@ def main() -> None:
         )
         return
 
-    last_prune_at = None
+    previous_stats = client.read_json("media-stats.json") or {}
+    last_prune_at = previous_stats.get("last_prune_at")
+    last_prune_freed = int(previous_stats.get("last_prune_freed_bytes") or 0)
     if plan and plan.evict_pages:
         last_prune_at = datetime.now().isoformat()
+        last_prune_freed = plan.freed_bytes
 
     stats = media_stats_payload(
         db, media_sizes,
@@ -139,7 +142,7 @@ def main() -> None:
         keep_recent_per_course=args.keep_recent,
         repo_size_kb=client.repo_size_kb(),
         last_prune_at=last_prune_at,
-        last_prune_freed_bytes=plan.freed_bytes if plan else 0,
+        last_prune_freed_bytes=last_prune_freed,
     )
     client.write_json("media-stats.json", stats)
     print(

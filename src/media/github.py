@@ -168,3 +168,15 @@ class MediaBranchClient:
             payload, ensure_ascii=False, indent=2,
         ).encode("utf-8")
         self.upload_files({path: data}, message="chore: update media stats")
+
+    def read_json(self, path: str) -> dict | None:
+        import json
+        _, tree = self.get_tree()
+        entry = tree.get(path)
+        if not entry:
+            return None
+        resp = self._request(
+            "GET", f"{self.api}/git/blobs/{entry['sha']}",
+        )
+        raw = base64.b64decode(resp.json()["content"])
+        return json.loads(raw.decode("utf-8"))
