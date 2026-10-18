@@ -23,7 +23,6 @@ When multiple course IDs are given:
 
 import argparse
 import os
-import smtplib
 import sys
 from email import encoders
 from email.mime.base import MIMEBase
@@ -38,7 +37,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.runtime import config
 from src.data.database import Database  # noqa: E402
-from src.api.emailer import _EMAIL_CSS, _PYGMENTS_CSS, _md_to_html  # noqa: E402
+from src.api.emailer import (  # noqa: E402
+    _EMAIL_CSS,
+    _PYGMENTS_CSS,
+    _md_to_html,
+    send_message,
+)
 
 # Override hardcoded pixel dimensions for PDF rendering.
 # WeasyPrint maps CSS px to physical size at 96 DPI, which makes the
@@ -99,13 +103,6 @@ def _build_plain(course_title: str, teacher: str, lectures: list[dict]) -> str:
     return "\n".join(parts)
 
 
-def _smtp_connect():
-    """Return an authenticated SMTP_SSL connection."""
-    server = smtplib.SMTP_SSL(config.SMTP_HOST, config.SMTP_PORT)
-    server.login(config.SMTP_EMAIL, config.SMTP_PASSWORD)
-    return server
-
-
 def _send_html_email(subject: str, html: str, plain: str,
                      cid_images: dict[str, bytes] | None = None) -> None:
     """Send a multipart HTML email with CID-embedded LaTeX images.
@@ -132,8 +129,7 @@ def _send_html_email(subject: str, html: str, plain: str,
                                 filename=f"{cid}.png")
             msg.attach(img_part)
 
-    with _smtp_connect() as server:
-        server.sendmail(config.SMTP_EMAIL, config.RECEIVER_EMAIL, msg.as_string())
+    send_message(msg, raise_on_failure=True)
 
 
 def _send_pdf_email(subject: str,
@@ -155,8 +151,7 @@ def _send_pdf_email(subject: str,
         part.add_header("Content-Disposition", "attachment", filename=filename)
         msg.attach(part)
 
-    with _smtp_connect() as server:
-        server.sendmail(config.SMTP_EMAIL, config.RECEIVER_EMAIL, msg.as_string())
+    send_message(msg, raise_on_failure=True)
 
 def _send_md_email(subject: str, md_content: list[tuple[bytes, str]]) -> None:
     """Send an email with Markdown content.
@@ -176,8 +171,7 @@ def _send_md_email(subject: str, md_content: list[tuple[bytes, str]]) -> None:
         part.add_header("Content-Disposition", "attachment", filename=filename)
         msg.attach(part)
 
-    with _smtp_connect() as server:
-        server.sendmail(config.SMTP_EMAIL, config.RECEIVER_EMAIL, msg.as_string())
+    send_message(msg, raise_on_failure=True)
 
 def _safe_filename(title: str) -> str:
     """Sanitise a course title for use as a filename."""

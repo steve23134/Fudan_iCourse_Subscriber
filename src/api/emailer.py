@@ -1,5 +1,6 @@
 import re
 import smtplib
+import ssl
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -110,6 +111,116 @@ li { margin-bottom: 4px; }
 _MIN_INLINE_HEIGHT = 13  # minimum logical height for inline formulas (px)
 
 _IMAGE_CACHE: dict[str, tuple] = {}
+
+
+def _smtp_candidates() -> list[tuple[str, int, str]]:
+    """Return the configured endpoint plus a sensible TLS fallback."""
+    primary = (config.SMTP_HOST, config.SMTP_PORT, config.SMTP_SECURITY)
+    candidates = [primary]
+    host, _port, security = primary
+    if security == "ssl":
+        candidates.append((host, 587, "starttls"))
+    elif security == "starttls":
+        candidates.append((host, 465, "ssl"))
+    if host == "mail.fudan.edu.cn" and ("mail.fudan.edu.cn", 25, "starttls") not in candidates:
+        candidates.append(("mail.fudan.edu.cn", 25, "starttls"))
+
+    # Preserve order while dropping duplicates.
+    seen = set()
+    out = []
+    for item in candidates:
+        if item not in seen:
+            seen.add(item)
+            out.append(item)
+    return out
+
+
+def _open_smtp(host: str, port: int, security: str):
+    """Open an SMTP connection using implicit TLS, STARTTLS, or plaintext."""
+    context = ssl.create_default_context()
+    if security == "ssl":
+        return smtplib.SMTP_SSL(
+            host, port, timeout=config.SMTP_TIMEOUT, context=context,
+        )
+    server = smtplib.SMTP(host, port, timeout=config.SMTP_TIMEOUT)
+    server.ehlo()
+    if security == "starttls":
+        server.starttls(context=context)
+        server.ehlo()
+    return server
+
+
+def _smtp_auth_hint() -> str:
+    """Actionable, non-secret guidance for the common 535 cases."""
+    domain = (
+        config.SMTP_EMAIL.rsplit("@", 1)[-1].lower()
+        if "@" in config.SMTP_EMAIL else ""
+    )
+    if domain in ("m.fudan.edu.cn", "fudan.edu.cn"):
+        return (
+            "SMTP 认证失败（535）。当前 SMTP_EMAIL 是复旦邮箱，"
+            "SMTP_PASSWORD 需要填写复旦邮箱的客户端授权码/邮箱密码"
+            "（不是 UIS 统一身份认证密码），并在邮箱设置中确认已开启 "
+            "SMTP/客户端服务。"
+        )
+    if domain == "qq.com":
+        return (
+            "SMTP 认证失败（535）。QQ 邮箱的 SMTP_PASSWORD 必须填写"
+            "16 位 SMTP 授权码，不是 QQ 登录密码。"
+        )
+    return (
+        "SMTP 认证失败（535）。请检查 SMTP_EMAIL / SMTP_PASSWORD，"
+        "并确认邮箱服务商已开启 SMTP 客户端登录。"
+    )
+
+
+def send_message(msg, *, raise_on_failure: bool = False) -> bool:
+    """Send a MIME message using the configured SMTP endpoint.
+
+    Tries the configured endpoint first, then a TLS fallback (465↔587).
+    Authentication failures fail fast instead of retrying every endpoint,
+    which avoids locking an account after a wrong password.
+
+    Returns True on success.  On failure returns False, or raises
+    RuntimeError when ``raise_on_failure`` is set (used by export scripts
+    so a failed export is visible in Actions).
+    """
+    errors: list[str] = []
+    for host, port, security in _smtp_candidates():
+        label = f"{host}:{port} ({security})"
+        for attempt in range(2):
+            try:
+                with _open_smtp(host, port, security) as server:
+                    server.login(config.SMTP_USERNAME, config.SMTP_PASSWORD)
+                    server.sendmail(
+                        config.SMTP_EMAIL,
+                        config.RECEIVER_EMAIL,
+                        msg.as_string(),
+                    )
+                print(f"[Emailer] Sent via {label}")
+                return True
+            except smtplib.SMTPAuthenticationError as exc:
+                hint = _smtp_auth_hint()
+                print(f"[Emailer] {label}: {hint} Server said: {exc}")
+                errors.append(f"{label}: {hint}")
+                # A wrong credential will not improve on another port.
+                if raise_on_failure:
+                    raise RuntimeError(hint) from exc
+                return False
+            except Exception as exc:
+                print(
+                    f"[Emailer] {label} attempt {attempt + 1}/2 failed: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                errors.append(f"{label}: {type(exc).__name__}: {exc}")
+                if attempt == 0:
+                    time.sleep(2 ** attempt)
+
+    detail = "\n".join(errors)
+    if raise_on_failure:
+        raise RuntimeError(f"All SMTP endpoints failed:\n{detail}")
+    print("[Emailer] All SMTP endpoints failed.")
+    return False
 
 
 def _fetch_latex_image(url: str, dpi: int = 300) -> tuple:
@@ -407,18 +518,7 @@ class Emailer:
         if cid_images:
             print(f"[Emailer] Embedded {len(cid_images)} LaTeX images as CID")
 
-        # Retry with exponential backoff
-        for attempt in range(3):
-            try:
-                with smtplib.SMTP_SSL(self.host, self.port) as server:
-                    server.login(self.sender, self.password)
-                    server.sendmail(self.sender, self.receiver, msg.as_string())
-                print(f"[Emailer] Sent: {subject}")
-                return True
-            except Exception as e:
-                print(f"[Emailer] Attempt {attempt + 1}/3 failed: {e}")
-                if attempt < 2:
-                    time.sleep(2 ** attempt)
-
-        print("[Emailer] All send attempts failed.")
-        return False
+        sent = send_message(msg)
+        if sent:
+            print(f"[Emailer] Sent: {subject}")
+        return sent

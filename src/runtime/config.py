@@ -113,12 +113,61 @@ def resolve_model_providers() -> list[dict]:
 DASHSCOPE_API_KEY = os.environ.get("DASHSCOPE_API_KEY", "")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
-# QQ SMTP
-SMTP_EMAIL = os.environ.get("SMTP_EMAIL", "")
-SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
-RECEIVER_EMAIL = os.environ.get("RECEIVER_EMAIL", "")
-SMTP_HOST = "smtp.qq.com"
-SMTP_PORT = 465
+# SMTP.  The endpoint is derived from the sender's domain so a Fudan
+# mailbox doesn't get sent to smtp.qq.com.  Every value can be overridden
+# with an explicit env var when a provider uses a non-standard endpoint.
+SMTP_EMAIL = os.environ.get("SMTP_EMAIL", "").strip()
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "").strip()
+RECEIVER_EMAIL = os.environ.get("RECEIVER_EMAIL", "").strip()
+
+
+def _default_smtp_endpoint(email: str) -> tuple[str, int, str]:
+    """Return ``(host, port, security)`` for a known sender domain.
+
+    ``security`` is ``ssl`` (implicit TLS), ``starttls``, or ``plain``.
+    Unknown domains fall back to ``smtp.<domain>:465``; users can override
+    with SMTP_HOST / SMTP_PORT / SMTP_SECURITY.
+    """
+    domain = email.rsplit("@", 1)[-1].lower() if "@" in email else ""
+    endpoints = {
+        "qq.com": ("smtp.qq.com", 465, "ssl"),
+        "foxmail.com": ("smtp.qq.com", 465, "ssl"),
+        "163.com": ("smtp.163.com", 465, "ssl"),
+        "126.com": ("smtp.126.com", 465, "ssl"),
+        "gmail.com": ("smtp.gmail.com", 465, "ssl"),
+        "outlook.com": ("smtp.office365.com", 587, "starttls"),
+        "hotmail.com": ("smtp.office365.com", 587, "starttls"),
+        "live.com": ("smtp.office365.com", 587, "starttls"),
+        # m.fudan.edu.cn is hosted by Tencent Exmail (MX: mxbiz*.qq.com).
+        "m.fudan.edu.cn": ("smtp.exmail.qq.com", 465, "ssl"),
+        # Staff/legacy Fudan mail runs on Coremail.
+        "fudan.edu.cn": ("mail.fudan.edu.cn", 465, "ssl"),
+    }
+    if domain in endpoints:
+        return endpoints[domain]
+    return (f"smtp.{domain}" if domain else "smtp.qq.com", 465, "ssl")
+
+
+_SMTP_DEFAULT_HOST, _SMTP_DEFAULT_PORT, _SMTP_DEFAULT_SECURITY = (
+    _default_smtp_endpoint(SMTP_EMAIL)
+)
+SMTP_HOST = os.environ.get("SMTP_HOST", "").strip() or _SMTP_DEFAULT_HOST
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, "") or default)
+    except ValueError:
+        return default
+
+
+SMTP_PORT = _env_int("SMTP_PORT", _SMTP_DEFAULT_PORT)
+SMTP_SECURITY = (
+    os.environ.get("SMTP_SECURITY", "").strip().lower()
+    or _SMTP_DEFAULT_SECURITY
+)
+if SMTP_SECURITY == "tls":
+    SMTP_SECURITY = "starttls"
+SMTP_USERNAME = os.environ.get("SMTP_USERNAME", "").strip() or SMTP_EMAIL
+SMTP_TIMEOUT = _env_int("SMTP_TIMEOUT", 30)
 
 # Database & Storage
 DATA_DIR = os.environ.get("DATA_DIR", "data")
