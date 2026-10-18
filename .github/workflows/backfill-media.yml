@@ -89,12 +89,16 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MEDIA_BRANCH: media
         run: |
+          TARGET_MB="${{ inputs.target_mb }}"
+          KEEP_RECENT="${{ inputs.keep_recent_per_course }}"
+          if [ -z "$TARGET_MB" ]; then TARGET_MB=700; fi
+          if [ -z "$KEEP_RECENT" ]; then KEEP_RECENT=2; fi
           python scripts/finalize_media.py \
             --db data/icourse.db \
             --media-dir data/media \
             --cap-mb 800 \
-            --target-mb "${{ inputs.target_mb }}" \
-            --keep-recent "${{ inputs.keep_recent_per_course }}"
+            --target-mb "$TARGET_MB" \
+            --keep-recent "$KEEP_RECENT"
 
       - name: Deploy database to data branch
         env:
