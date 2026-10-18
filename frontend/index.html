@@ -877,7 +877,7 @@
         <span x-text="pruneTriggering ? '触发中…' : '立即清理 media 分支'"></span>
       </button>
       <p class="text-[11px] text-gray-400 mt-2">
-        清理会从最旧的课次开始删除截图，保留 OCR 文本；目标针对 media 分支，
+        清理会从最旧的课次开始、优先整节删除截图，保留 OCR 文本；目标针对 media 分支，
         GitHub 总仓库还包含历史对象，实际统计可能略高。之后可对课程重新运行 Backfill Media。
       </p>
       <p x-show="mediaStats?.last_prune_at" class="text-[11px] text-gray-400 mt-1"
