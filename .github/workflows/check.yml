@@ -214,8 +214,9 @@ jobs:
           fi
 
           AFTER=$(md5sum data/icourse.db | cut -d' ' -f1)
-          if [ "$AFTER" = "${{ steps.db-before.outputs.hash }}" ]; then
-            echo "Database unchanged, skipping commit."
+          if [ "$AFTER" = "${{ steps.db-before.outputs.hash }}" ] && \
+             [ -z "$(find data/media -type f -name '*.enc' 2>/dev/null | head -n 1)" ]; then
+            echo "Database unchanged and no new media, skipping commit."
             exit 0
           fi
 
