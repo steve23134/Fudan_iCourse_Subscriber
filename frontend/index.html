@@ -853,7 +853,7 @@
 
       <div class="grid grid-cols-2 gap-3 mt-4">
         <div>
-          <label class="block text-xs text-gray-500 mb-1">清理到 (MB)</label>
+          <label class="block text-xs text-gray-500 mb-1">media 清理到 (MB)</label>
           <input type="number" x-model.number="pruneTargetMb" min="10" max="2000"
                  class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-300 focus:outline-none">
         </div>
@@ -869,7 +869,8 @@
         <span x-text="pruneTriggering ? '触发中…' : '立即清理 media 分支'"></span>
       </button>
       <p class="text-[11px] text-gray-400 mt-2">
-        清理会从最旧的课次开始删除截图，保留 OCR 文本；之后可对课程重新运行 Backfill Media。
+        清理会从最旧的课次开始删除截图，保留 OCR 文本；目标针对 media 分支，
+        GitHub 总仓库还包含历史对象，实际统计可能略高。之后可对课程重新运行 Backfill Media。
       </p>
       <p x-show="mediaStats?.last_prune_at" class="text-[11px] text-gray-400 mt-1"
          x-text="'上次清理：' + (mediaStats?.last_prune_at || '') + (mediaStats?.last_prune_freed_bytes ? '，释放 ' + formatBytes(mediaStats.last_prune_freed_bytes) : '')"></p>
