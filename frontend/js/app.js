@@ -252,6 +252,7 @@ document.addEventListener("alpine:init", () => {
     currentPptPages: [],
     pptImageUrls: {}, pptImageErrors: {}, pptImageLoading: {},
     lightboxUrl: null, pptObserver: null,
+    mediaActive: 0,
     mediaStats: null, mediaStatsLoading: false,
     pruneTargetMb: 700, pruneKeepRecent: 2, pruneTriggering: false,
     detailView: "summary",
@@ -519,24 +520,26 @@ document.addEventListener("alpine:init", () => {
         {}, this.pptImageLoading, { [pageNum]: true },
       );
       try {
-        var creds = _loadCreds();
-        if (!creds?.token) throw new Error("未登录或 PAT 缺失");
-        var cached = await _idbGet("media:" + page.img_sha);
-        var bytes = cached;
-        if (!bytes) {
-          var encrypted = await ICS.github.fetchBlobBytes(
-            this.repoOwner, this.repoName, page.img_sha, creds.token,
+        var url = await this._withMediaSlot(async () => {
+          var creds = _loadCreds();
+          if (!creds?.token) throw new Error("未登录或 PAT 缺失");
+          var cached = await _idbGet("media:" + page.img_sha);
+          var bytes = cached;
+          if (!bytes) {
+            var encrypted = await ICS.github.fetchBlobBytes(
+              this.repoOwner, this.repoName, page.img_sha, creds.token,
+            );
+            var password = await ICS.crypto.buildPasswordV2(creds);
+            bytes = await ICS.crypto.decrypt(
+              encrypted, password, ICS.crypto.NEW_ITERATIONS,
+            );
+            await _idbPut("media:" + page.img_sha, bytes);
+          }
+          var blob = new Blob(
+            [bytes], { type: page.img_mime || "image/jpeg" },
           );
-          var password = await ICS.crypto.buildPasswordV2(creds);
-          bytes = await ICS.crypto.decrypt(
-            encrypted, password, ICS.crypto.NEW_ITERATIONS,
-          );
-          await _idbPut("media:" + page.img_sha, bytes);
-        }
-        var blob = new Blob(
-          [bytes], { type: page.img_mime || "image/jpeg" },
-        );
-        var url = URL.createObjectURL(blob);
+          return URL.createObjectURL(blob);
+        });
         this.pptImageUrls = Object.assign(
           {}, this.pptImageUrls, { [pageNum]: url },
         );
@@ -549,6 +552,17 @@ document.addEventListener("alpine:init", () => {
         var loading = Object.assign({}, this.pptImageLoading);
         delete loading[pageNum];
         this.pptImageLoading = loading;
+      }
+    },
+    async _withMediaSlot(fn) {
+      while (this.mediaActive >= 4) {
+        await new Promise((resolve) => setTimeout(resolve, 60));
+      }
+      this.mediaActive++;
+      try {
+        return await fn();
+      } finally {
+        this.mediaActive--;
       }
     },
     observePptImages() {
