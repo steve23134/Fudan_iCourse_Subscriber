@@ -1,14 +1,14 @@
 {
-  "updated_at": "2026-10-18T02:53:12.773898",
-  "media_bytes": 84432,
-  "media_files": 1,
+  "updated_at": "2026-10-18T03:03:35.024493",
+  "media_bytes": 75214560,
+  "media_files": 339,
   "cap_mb": 800,
   "target_mb": 700,
   "keep_recent_per_course": 2,
-  "repo_size_kb": 116071,
-  "repo_estimated_bytes": 118856704,
-  "pages_with_media": 1,
-  "lectures_with_media": 1,
+  "repo_size_kb": 116188,
+  "repo_estimated_bytes": 118976512,
+  "pages_with_media": 339,
+  "lectures_with_media": 6,
   "last_prune_at": null,
   "last_prune_freed_bytes": 0
 }
