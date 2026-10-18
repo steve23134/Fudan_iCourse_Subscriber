@@ -166,6 +166,8 @@ SMTP_SECURITY = (
 )
 if SMTP_SECURITY == "tls":
     SMTP_SECURITY = "starttls"
+if SMTP_SECURITY not in ("ssl", "starttls", "plain"):
+    SMTP_SECURITY = _SMTP_DEFAULT_SECURITY
 SMTP_USERNAME = os.environ.get("SMTP_USERNAME", "").strip() or SMTP_EMAIL
 SMTP_TIMEOUT = _env_int("SMTP_TIMEOUT", 30)
 
