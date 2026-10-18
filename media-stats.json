@@ -1,0 +1,14 @@
+{
+  "updated_at": "2026-10-18T02:53:12.773898",
+  "media_bytes": 84432,
+  "media_files": 1,
+  "cap_mb": 800,
+  "target_mb": 700,
+  "keep_recent_per_course": 2,
+  "repo_size_kb": 116071,
+  "repo_estimated_bytes": 118856704,
+  "pages_with_media": 1,
+  "lectures_with_media": 1,
+  "last_prune_at": null,
+  "last_prune_freed_bytes": 0
+}
