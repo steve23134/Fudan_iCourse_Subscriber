@@ -190,10 +190,10 @@ def _smtp_auth_hint() -> str:
             "SMTP 认证失败（535）。QQ 邮箱的 SMTP_PASSWORD 必须填写"
             "16 位 SMTP 授权码，不是 QQ 登录密码。"
         )
-    if domain in (
+    if (domain in (
         "outlook.com", "hotmail.com", "live.com", "msn.com",
         "outlook.jp", "office365.com", "onmicrosoft.com",
-    ):
+    ) or domain.endswith(".onmicrosoft.com")):
         return (
             "SMTP 认证失败（535）。Outlook 需要 Microsoft 账户的"
             "应用专用密码；如果服务器提示 basic authentication "

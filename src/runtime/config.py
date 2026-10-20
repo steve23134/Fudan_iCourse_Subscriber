@@ -129,6 +129,8 @@ def _default_smtp_endpoint(email: str) -> tuple[str, int, str]:
     with SMTP_HOST / SMTP_PORT / SMTP_SECURITY.
     """
     domain = email.rsplit("@", 1)[-1].lower() if "@" in email else ""
+    if domain == "onmicrosoft.com" or domain.endswith(".onmicrosoft.com"):
+        return ("smtp.office365.com", 587, "starttls")
     endpoints = {
         "qq.com": ("smtp.qq.com", 465, "ssl"),
         "foxmail.com": ("smtp.qq.com", 465, "ssl"),
@@ -141,7 +143,6 @@ def _default_smtp_endpoint(email: str) -> tuple[str, int, str]:
         "msn.com": ("smtp.office365.com", 587, "starttls"),
         "outlook.jp": ("smtp.office365.com", 587, "starttls"),
         "office365.com": ("smtp.office365.com", 587, "starttls"),
-        "onmicrosoft.com": ("smtp.office365.com", 587, "starttls"),
         # m.fudan.edu.cn is hosted by Tencent Exmail (MX: mxbiz*.qq.com).
         "m.fudan.edu.cn": ("smtp.exmail.qq.com", 465, "ssl"),
         # Staff/legacy Fudan mail runs on Coremail.
