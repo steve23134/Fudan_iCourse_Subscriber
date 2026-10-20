@@ -74,6 +74,7 @@ def main() -> None:
     ok = emailer.send(
         rows, on_batch_sent=_mark,
         subject_prefix=args.subject_prefix,
+        neutral_metadata=True,
     )
     print(f"[Resend] {'done' if ok else 'FAILED'}: {len(rows)} lecture(s)")
     if not ok:

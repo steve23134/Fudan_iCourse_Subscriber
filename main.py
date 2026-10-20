@@ -266,7 +266,11 @@ def _send_email(emailer: Emailer | None, db: Database, reporter: Reporter,
         def _mark_batch_sent(batch):
             db.mark_emailed_batch([item["sub_id"] for item in batch])
 
-        if not emailer.send(email_items, on_batch_sent=_mark_batch_sent):
+        if not emailer.send(
+            email_items,
+            on_batch_sent=_mark_batch_sent,
+            neutral_metadata=True,
+        ):
             reporter.email_failed()
     except Exception:
         reporter.info("[Email] Failed to send:")

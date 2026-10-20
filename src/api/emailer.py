@@ -425,19 +425,32 @@ def _build_lecture_pdf_html(item: dict) -> str:
     )
 
 
-def _render_lecture_pdf(item: dict) -> tuple[bytes, str]:
+def _render_lecture_pdf(
+    item: dict, *, neutral_header: bool = False,
+) -> tuple[bytes, str]:
     try:
         import weasyprint  # noqa: PLC0415
     except ImportError as exc:
         raise RuntimeError(
             "weasyprint is required for PDF summary emails"
         ) from exc
-    html = _build_lecture_pdf_html(item)
+    if neutral_header:
+        header_item = {
+            **item,
+            "course_title": "课程笔记",
+            "sub_title": item.get("date", ""),
+        }
+        html = _build_lecture_pdf_html(header_item)
+    else:
+        html = _build_lecture_pdf_html(item)
     pdf_bytes = weasyprint.HTML(string=html).write_pdf()
-    filename = (
-        f"{_safe_filename(item.get('course_title', 'course'))}_"
-        f"{_safe_filename(item.get('sub_title', 'lecture'))}.pdf"
-    )
+    if neutral_header:
+        filename = f"notes_{_safe_filename(item.get('date', 'lecture'))}.pdf"
+    else:
+        filename = (
+            f"{_safe_filename(item.get('course_title', 'course'))}_"
+            f"{_safe_filename(item.get('sub_title', 'lecture'))}.pdf"
+        )
     return pdf_bytes, filename
 
 
@@ -454,27 +467,37 @@ class Emailer:
     def _build_pdf_message(
         self, items: list[dict], subject: str,
         attachments: list[tuple[bytes, str]],
+        *, neutral: bool = False,
     ):
         plain_lines = [
-            f"课程：{items[0]['course_title']}",
-            f"本邮件包含 {len(attachments)} 节课的 PDF 笔记：",
+            "课程笔记 PDF 已随邮件发送。"
+            if neutral else f"课程：{items[0]['course_title']}",
+            f"本邮件包含 {len(attachments)} 份课程笔记 PDF：",
         ]
         for item in items:
             plain_lines.append(
+                f"- {item.get('date', '')}"
+                if neutral else
                 f"- {item['sub_title']} ({item.get('date', '')})"
             )
         plain = "\n".join(plain_lines)
 
-        list_items = "\n".join(
-            f"<li>{escape(item['sub_title'])} "
-            f"<small>({escape(item.get('date', ''))})</small></li>"
-            for item in items
-        )
+        if neutral:
+            list_items = "\n".join(
+                f"<li>课程笔记 <small>({escape(item.get('date', ''))})</small></li>"
+                for item in items
+            )
+        else:
+            list_items = "\n".join(
+                f"<li>{escape(item['sub_title'])} "
+                f"<small>({escape(item.get('date', ''))})</small></li>"
+                for item in items
+            )
         html = (
             "<!DOCTYPE html><html><head><meta charset='utf-8'>"
             f"<style>{_EMAIL_CSS}</style></head><body>"
-            f"<h2>{escape(items[0]['course_title'])}</h2>"
-            f"<p>本邮件包含 {len(attachments)} 节课的 PDF 笔记：</p>"
+            f"<h2>{'课程笔记' if neutral else escape(items[0]['course_title'])}</h2>"
+            f"<p>本邮件包含 {len(attachments)} 份课程笔记 PDF：</p>"
             f"<ul>{list_items}</ul>"
             "<p style='color:#777;font-size:12px'>"
             "每节课对应一个独立 PDF 附件。</p></body></html>"
@@ -502,6 +525,7 @@ class Emailer:
         self, items: list[dict],
         on_batch_sent=None,
         subject_prefix: str = "",
+        neutral_metadata: bool = False,
     ) -> bool:
         """Render one PDF per lecture and send them in small batches.
 
@@ -533,14 +557,21 @@ class Emailer:
             total = total_by_course[course_title]
             attachments: list[tuple[bytes, str]] = []
             sent_items: list[dict] = []
-            for lec in batch:
+            for pdf_index, lec in enumerate(batch, start=1):
                 try:
                     print(
                         f"[Emailer] Rendering PDF: {course_title} / "
                         f"{lec.get('sub_title', '')}",
                         flush=True,
                     )
-                    pdf_bytes, filename = _render_lecture_pdf(lec)
+                    pdf_bytes, filename = _render_lecture_pdf(
+                        lec, neutral_header=neutral_metadata,
+                    )
+                    if neutral_metadata:
+                        filename = (
+                            f"notes_{_safe_filename(lec.get('date', 'lecture'))}"
+                            f"_{pdf_index:02d}.pdf"
+                        )
                     attachments.append((pdf_bytes, filename))
                     sent_items.append(lec)
                 except Exception as exc:
@@ -554,16 +585,32 @@ class Emailer:
 
             if not attachments:
                 continue
-            subject = (
-                f"[FiCS] {course_title} ({len(attachments)} 节课 PDF)"
-                + (f" [{index}/{total}]" if total > 1 else "")
-            )
+            if neutral_metadata:
+                dates = sorted({
+                    item.get("date", "") for item in sent_items
+                    if item.get("date")
+                })
+                date_label = (
+                    dates[0] if len(dates) == 1
+                    else f"{dates[0]} 至 {dates[-1]}"
+                ) if dates else "课程笔记"
+                subject = (
+                    f"[课程笔记] {date_label} "
+                    f"({len(attachments)} 份 PDF)"
+                    + (f" [{index}/{total}]" if total > 1 else "")
+                )
+            else:
+                subject = (
+                    f"[FiCS] {course_title} ({len(attachments)} 节课 PDF)"
+                    + (f" [{index}/{total}]" if total > 1 else "")
+                )
             if any(item.get("is_update") for item in sent_items):
                 subject += "（含 PPT 识别·更新）"
             subject = (subject_prefix or "") + subject
 
             msg = self._build_pdf_message(
                 sent_items, subject, attachments,
+                neutral=neutral_metadata,
             )
             if not send_message(msg):
                 print(f"[Emailer] Batch failed: {subject}")
