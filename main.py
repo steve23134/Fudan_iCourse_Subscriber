@@ -227,6 +227,7 @@ def _drive_lectures(client: ICourseClient, db: Database,
                     "course_title": course_title,
                     "sub_title": lecture.get("sub_title", sub_id),
                     "date": lecture.get("date", ""),
+                    "teacher": lecture.get("lecturer_name", ""),
                     "summary": summary,
                 })
         except Exception:
@@ -253,6 +254,7 @@ def _send_email(emailer: Emailer | None, db: Database, reporter: Reporter,
                     "course_title": row["course_title"],
                     "sub_title": row["sub_title"],
                     "date": row["date"],
+                    "teacher": row.get("teacher", ""),
                     "summary": row["summary"],
                 })
         reporter.email_recovered_unsent(len(unsent))
@@ -261,9 +263,10 @@ def _send_email(emailer: Emailer | None, db: Database, reporter: Reporter,
         return
     try:
         reporter.email_summary(len(email_items))
-        if emailer.send(email_items):
-            db.mark_emailed_batch([item["sub_id"] for item in email_items])
-        else:
+        def _mark_batch_sent(batch):
+            db.mark_emailed_batch([item["sub_id"] for item in batch])
+
+        if not emailer.send(email_items, on_batch_sent=_mark_batch_sent):
             reporter.email_failed()
     except Exception:
         reporter.info("[Email] Failed to send:")

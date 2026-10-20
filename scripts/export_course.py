@@ -277,7 +277,7 @@ def main():
             print("weasyprint is required for PDF export. Install it with: pip install weasyprint")
             sys.exit(1)
 
-        # PDF mode: one PDF per course, all PDFs in one email
+        # PDF mode: one PDF per lecture, all PDFs in one email
         attachments: list[tuple[bytes, str]] = []
         titles: list[str] = []
         for cid in course_ids:
@@ -287,18 +287,29 @@ def main():
             course_title, teacher, lectures = result
             titles.append(course_title)
 
-            html = _build_html(course_title, teacher, lectures, pdf=True)
-            print(f"Generating PDF for {course_title}...")
-            pdf_bytes = weasyprint.HTML(string=html).write_pdf()
-            filename = f"{_safe_filename(course_title)}_summaries.pdf"
-            attachments.append((pdf_bytes, filename))
-            print(f"  PDF ready ({len(pdf_bytes)} bytes): {filename}")
+            for lec in lectures:
+                html = _build_html(course_title, teacher, [lec], pdf=True)
+                print(
+                    f"Generating PDF for {course_title} / "
+                    f"{lec['sub_title']}..."
+                )
+                pdf_bytes = weasyprint.HTML(string=html).write_pdf()
+                filename = (
+                    f"{_safe_filename(course_title)}_"
+                    f"{_safe_filename(lec['sub_title'])}_summary.pdf"
+                )
+                attachments.append((pdf_bytes, filename))
+                print(f"  PDF ready ({len(pdf_bytes)} bytes): {filename}")
 
         if not attachments:
             print("No courses with summaries found – nothing to send.")
             sys.exit(0)
 
-        subject = "[iCourse 课程摘要导出] " + ", ".join(titles)
+        subject = (
+            "[iCourse 课程摘要导出] "
+            + ", ".join(titles)
+            + f"（{len(attachments)} 节课 PDF）"
+        )
         total_bytes = sum(len(b) for b, _ in attachments)
         print(f"Sending email with {len(attachments)} PDF(s) ({total_bytes} bytes)...")
         _send_pdf_email(subject, attachments)

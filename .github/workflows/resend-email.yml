@@ -1,0 +1,92 @@
+name: Resend Email
+
+on:
+  workflow_dispatch:
+    inputs:
+      since:
+        description: "Only resend lectures emailed at/after this ISO time (optional)"
+        required: false
+        default: ""
+        type: string
+      course_id:
+        description: "Optional course ID"
+        required: false
+        default: ""
+        type: string
+      sub_ids:
+        description: "Optional comma-separated lecture sub_ids"
+        required: false
+        default: ""
+        type: string
+      all:
+        description: "Resend every summarized lecture"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: media-maintenance
+  cancel-in-progress: false
+
+jobs:
+  resend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install PDF dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fonts-noto-cjk libpango-1.0-0 libcairo2
+          pip install weasyprint pygments
+          sudo mkdir -p /usr/local/share/fonts/custom
+          sudo cp assets/MSYH.TTC /usr/local/share/fonts/custom/
+          sudo cp assets/MSYHBD.TTC /usr/local/share/fonts/custom/
+          sudo cp assets/MSYHL.TTC /usr/local/share/fonts/custom/
+          sudo fc-cache -fv
+
+      - name: Fetch database from data branch
+        run: |
+          mkdir -p data/sharded/shards
+          git fetch origin data --depth=1
+          git show origin/data:data/icourse-index.enc > data/sharded/icourse-index.enc
+          for path in $(git ls-tree -r --name-only origin/data | grep '^data/shards/'); do
+            git show "origin/data:$path" > "data/sharded/shards/$(basename "$path")"
+          done
+
+      - name: Reassemble database
+        env:
+          STUID: ${{ secrets.STUID }}
+          UISPSW: ${{ secrets.UISPSW }}
+        run: python scripts/db_shard.py reassemble data/sharded data/icourse.db
+
+      - name: Resend email
+        env:
+          SMTP_EMAIL: ${{ secrets.SMTP_EMAIL }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_SECURITY: ${{ secrets.SMTP_SECURITY }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+        run: |
+          ALL_FLAG=""
+          if [ "${{ inputs.all }}" = "true" ]; then ALL_FLAG="--all"; fi
+          python -u scripts/resend_email.py \
+            --db data/icourse.db \
+            --since "${{ inputs.since }}" \
+            --course-id "${{ inputs.course_id }}" \
+            --sub-ids "${{ inputs.sub_ids }}" \
+            $ALL_FLAG

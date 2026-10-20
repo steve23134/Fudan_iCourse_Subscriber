@@ -66,6 +66,17 @@ jobs:
           path: ~/.cache/rapidocr
           key: rapidocr-onnx-default-v1
 
+      - name: Install PDF dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fonts-noto-cjk libpango-1.0-0 libcairo2
+          pip install weasyprint pygments
+          sudo mkdir -p /usr/local/share/fonts/custom
+          sudo cp assets/MSYH.TTC /usr/local/share/fonts/custom/
+          sudo cp assets/MSYHBD.TTC /usr/local/share/fonts/custom/
+          sudo cp assets/MSYHL.TTC /usr/local/share/fonts/custom/
+          sudo fc-cache -fv
+
       - name: Fetch database from data branch
         run: |
           mkdir -p data

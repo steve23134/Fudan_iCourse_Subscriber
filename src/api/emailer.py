@@ -7,10 +7,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 from io import BytesIO
 from PIL import Image
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from email.mime.image import MIMEImage
+from email.mime.application import MIMEApplication
 from html import escape
 from email.utils import formataddr
 from urllib.parse import quote
@@ -106,6 +106,24 @@ blockquote {
 }
 ul, ol { padding-left: 24px; }
 li { margin-bottom: 4px; }
+"""
+
+_PDF_CSS = """\
+@page { size: A4; margin: 16mm 15mm; }
+body {
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    font-family: "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+    font-size: 11pt;
+    line-height: 1.65;
+}
+h1 { font-size: 20pt; margin: 0 0 8px; color: #2c3e50; }
+h2 { font-size: 15pt; margin: 0 0 18px; color: #34495e; }
+h3 { page-break-after: avoid; }
+img { max-width: 100% !important; height: auto !important; }
+pre { white-space: pre-wrap !important; word-wrap: break-word; }
+table { page-break-inside: avoid; }
 """
 
 _MIN_INLINE_HEIGHT = 13  # minimum logical height for inline formulas (px)
@@ -383,6 +401,46 @@ def _resolve_src(url: str, img_data: bytes | None,
     return url
 
 
+def _safe_filename(text: str, limit: int = 80) -> str:
+    cleaned = "".join(
+        c if c.isalnum() or c in " _-" else "_" for c in str(text)
+    )
+    cleaned = cleaned.strip().replace(" ", "_")
+    return (cleaned[:limit] or "lecture")
+
+
+def _build_lecture_pdf_html(item: dict) -> str:
+    course = escape(item.get("course_title", ""))
+    title = escape(item.get("sub_title", ""))
+    date = escape(item.get("date", ""))
+    teacher = escape(item.get("teacher", ""))
+    summary = _md_to_html(item.get("summary", ""), cid_images=None)
+    teacher_html = f"<p>任课教师：{teacher}</p>" if teacher else ""
+    return (
+        "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+        f"<style>{_EMAIL_CSS}\n{_PYGMENTS_CSS}\n{_PDF_CSS}</style>"
+        "</head><body>"
+        f"<h1>{course}</h1><h2>{title} <small>({date})</small></h2>"
+        f"{teacher_html}<hr>{summary}</body></html>"
+    )
+
+
+def _render_lecture_pdf(item: dict) -> tuple[bytes, str]:
+    try:
+        import weasyprint  # noqa: PLC0415
+    except ImportError as exc:
+        raise RuntimeError(
+            "weasyprint is required for PDF summary emails"
+        ) from exc
+    html = _build_lecture_pdf_html(item)
+    pdf_bytes = weasyprint.HTML(string=html).write_pdf()
+    filename = (
+        f"{_safe_filename(item.get('course_title', 'course'))}_"
+        f"{_safe_filename(item.get('sub_title', 'lecture'))}.pdf"
+    )
+    return pdf_bytes, filename
+
+
 class Emailer:
     """Send course summary emails via QQ SMTP SSL."""
 
@@ -393,132 +451,131 @@ class Emailer:
         self.password = config.SMTP_PASSWORD
         self.receiver = config.RECEIVER_EMAIL
 
-    def send(self, items: list[dict]) -> bool:
-        """Send a single email containing all lecture summaries.
-
-        LaTeX formulas are rendered as PNG images and embedded directly into
-        the email via CID attachments, so they display on all clients
-        (including mobile) without loading external images.
-
-        Args:
-            items: List of dicts, each with keys:
-                   course_title, sub_title, date, summary
-                   Optional key:
-                   is_update — bool, True for re-summarized lectures (v2
-                               PPT-aware format replacing an older v1 summary).
-                               Adds an "（含 PPT 识别·更新）" subject suffix and
-                               an inline 更新 badge per affected lecture.
-
-        Returns:
-            True if email was sent successfully, False otherwise.
-        """
-        if not items:
-            return True
-
-        any_update = any(item.get("is_update") for item in items)
-
-        # Group by course (preserve insertion order)
-        courses: OrderedDict[str, list[dict]] = OrderedDict()
-        for item in items:
-            courses.setdefault(item["course_title"], []).append(item)
-
-        # Subject
-        parts = [f"{ct} ({len(lecs)})" for ct, lecs in courses.items()]
-        subject = f"[FiCS] {', '.join(parts)}"
-        if any_update:
-            subject += "（含 PPT 识别·更新）"
-
-        # Plain text (Markdown as-is, readable without rendering)
-        plain_sections = []
-        for course_title, lectures in courses.items():
-            plain_sections.append(f"{'=' * 40}")
-            plain_sections.append(f"课程：{course_title}")
-            plain_sections.append(f"{'=' * 40}")
-            for lec in lectures:
-                tag = "[更新] " if lec.get("is_update") else ""
-                plain_sections.append(
-                    f"\n--- {tag}{lec['sub_title']} ({lec['date']}) ---\n"
-                )
-                plain_sections.append(lec["summary"])
-        plain = "\n".join(plain_sections)
-
-        # HTML (Markdown → styled HTML with CID-embedded LaTeX images)
-        cid_images: dict[str, bytes] = {}
-
-        # Pre-compute one anchor ID per course so TOC and headings stay in sync
-        course_anchors = {
-            course_title: f"course-{i}"
-            for i, course_title in enumerate(courses)
-        }
-
-        # Build table of contents
-        toc_items = [
-            f'<li><a href="#{anchor}" style="color:#3498db;text-decoration:none;">'
-            f"{escape(course_title)}</a></li>"
-            for course_title, anchor in course_anchors.items()
+    def _build_pdf_message(
+        self, items: list[dict], subject: str,
+        attachments: list[tuple[bytes, str]],
+    ):
+        plain_lines = [
+            f"课程：{items[0]['course_title']}",
+            f"本邮件包含 {len(attachments)} 节课的 PDF 笔记：",
         ]
-        toc_html = (
-            '<nav style="background:#f8f9fa;border:1px solid #e0e0e0;'
-            'border-radius:6px;padding:16px 20px;margin-bottom:28px;">'
-            '<strong style="color:#2c3e50;font-size:16px;">目录</strong>'
-            '<ol style="margin:8px 0 0;padding-left:20px;">'
-            + "\n".join(toc_items)
-            + "</ol></nav>"
+        for item in items:
+            plain_lines.append(
+                f"- {item['sub_title']} ({item.get('date', '')})"
+            )
+        plain = "\n".join(plain_lines)
+
+        list_items = "\n".join(
+            f"<li>{escape(item['sub_title'])} "
+            f"<small>({escape(item.get('date', ''))})</small></li>"
+            for item in items
         )
-
-        update_badge = (
-            '<span style="background:#ff9800;color:white;padding:2px 8px;'
-            'border-radius:3px;font-size:12px;margin-right:8px;'
-            'vertical-align:middle;">更新</span>'
-        )
-
-        body_parts = [toc_html]
-        for course_title, lectures in courses.items():
-            anchor = course_anchors[course_title]
-            body_parts.append(f'<h2 id="{anchor}">{escape(course_title)}</h2>')
-            for lec in lectures:
-                badge = update_badge if lec.get("is_update") else ""
-                body_parts.append(
-                    f"<h3>{badge}{escape(lec['sub_title'])} "
-                    f"<small>({escape(lec['date'])})</small></h3>"
-                )
-                body_parts.append(
-                    _md_to_html(lec["summary"], cid_images=cid_images)
-                )
-                body_parts.append("<hr>")
-
         html = (
-            "<!DOCTYPE html>"
-            "<html><head><meta charset='utf-8'>"
-            f"<style>{_EMAIL_CSS}\n{_PYGMENTS_CSS}</style>"
-            "</head><body>"
-            + "\n".join(body_parts)
-            + "</body></html>"
+            "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+            f"<style>{_EMAIL_CSS}</style></head><body>"
+            f"<h2>{escape(items[0]['course_title'])}</h2>"
+            f"<p>本邮件包含 {len(attachments)} 节课的 PDF 笔记：</p>"
+            f"<ul>{list_items}</ul>"
+            "<p style='color:#777;font-size:12px'>"
+            "每节课对应一个独立 PDF 附件。</p></body></html>"
         )
 
-        # Build MIME: related > alternative > (plain, html) + image attachments
-        msg = MIMEMultipart("related")
+        msg = MIMEMultipart("mixed")
         msg["Subject"] = subject
         msg["From"] = formataddr(("iCourse Subscriber", self.sender))
         msg["To"] = self.receiver
-
         msg_alt = MIMEMultipart("alternative")
         msg_alt.attach(MIMEText(plain, "plain", "utf-8"))
         msg_alt.attach(MIMEText(html, "html", "utf-8"))
         msg.attach(msg_alt)
 
-        # Attach CID images
-        for cid, png_data in cid_images.items():
-            img_part = MIMEImage(png_data, "png")
-            img_part.add_header("Content-ID", f"<{cid}>")
-            img_part.add_header("Content-Disposition", "inline",
-                                filename=f"{cid}.png")
-            msg.attach(img_part)
+        for pdf_bytes, filename in attachments:
+            part = MIMEApplication(pdf_bytes, _subtype="pdf")
+            part.add_header(
+                "Content-Disposition", "attachment",
+                filename=("utf-8", "", filename),
+            )
+            msg.attach(part)
+        return msg
 
-        if cid_images:
-            print(f"[Emailer] Embedded {len(cid_images)} LaTeX images as CID")
+    def send(
+        self, items: list[dict],
+        on_batch_sent=None,
+        subject_prefix: str = "",
+    ) -> bool:
+        """Render one PDF per lecture and send them in small batches.
 
-        sent = send_message(msg)
-        if sent:
-            print(f"[Emailer] Sent: {subject}")
-        return sent
+        Outlook rejects a single message with more than 1000 MIME parts.
+        Each email carries only a few PDF attachments, so the HTML body no
+        longer embeds thousands of LaTeX images.
+        """
+        if not items:
+            return True
+
+        courses: OrderedDict[str, list[dict]] = OrderedDict()
+        for item in items:
+            courses.setdefault(item["course_title"], []).append(item)
+
+        batches: list[tuple[str, list[dict]]] = []
+        for course_title, lectures in courses.items():
+            size = max(1, config.EMAIL_PDF_MAX_ATTACHMENTS)
+            for start in range(0, len(lectures), size):
+                batches.append(
+                    (course_title, lectures[start:start + size])
+                )
+
+        total_by_course = Counter(course for course, _ in batches)
+        seen = Counter()
+        all_ok = True
+        for course_title, batch in batches:
+            seen[course_title] += 1
+            index = seen[course_title]
+            total = total_by_course[course_title]
+            attachments: list[tuple[bytes, str]] = []
+            sent_items: list[dict] = []
+            for lec in batch:
+                try:
+                    print(
+                        f"[Emailer] Rendering PDF: {course_title} / "
+                        f"{lec.get('sub_title', '')}",
+                        flush=True,
+                    )
+                    pdf_bytes, filename = _render_lecture_pdf(lec)
+                    attachments.append((pdf_bytes, filename))
+                    sent_items.append(lec)
+                except Exception as exc:
+                    all_ok = False
+                    print(
+                        f"[Emailer] PDF failed for "
+                        f"{lec.get('sub_title', '')}: "
+                        f"{type(exc).__name__}: {exc}",
+                        flush=True,
+                    )
+
+            if not attachments:
+                continue
+            subject = (
+                f"[FiCS] {course_title} ({len(attachments)} 节课 PDF)"
+                + (f" [{index}/{total}]" if total > 1 else "")
+            )
+            if any(item.get("is_update") for item in sent_items):
+                subject += "（含 PPT 识别·更新）"
+            subject = (subject_prefix or "") + subject
+
+            msg = self._build_pdf_message(
+                sent_items, subject, attachments,
+            )
+            if not send_message(msg):
+                print(f"[Emailer] Batch failed: {subject}")
+                return False
+            print(
+                f"[Emailer] Sent: {subject} "
+                f"({len(attachments)} PDF, batch {index}/{total})"
+            )
+            if on_batch_sent:
+                try:
+                    on_batch_sent(sent_items)
+                except Exception as exc:
+                    print(f"[Emailer] on_batch_sent failed: {exc}")
+                    all_ok = False
+        return all_ok
