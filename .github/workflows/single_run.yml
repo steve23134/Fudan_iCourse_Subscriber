@@ -73,6 +73,9 @@ jobs:
           path: ~/.cache/rapidocr
           key: rapidocr-onnx-default-v1
 
+      - name: Warm up OCR model
+        run: timeout 300 python -c "from rapidocr_onnxruntime import RapidOCR; RapidOCR(); print('OCR model ready')"
+
       - name: Fetch database from data branch
         run: |
           mkdir -p data

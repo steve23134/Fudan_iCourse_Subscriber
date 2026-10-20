@@ -7,6 +7,12 @@ so we load ONE recognizer per process and let multiple threads call it.
 from __future__ import annotations
 
 import io
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
 import threading
 from dataclasses import dataclass
 
@@ -93,49 +99,60 @@ def ocr_image_text(image_bytes: bytes) -> str:
 def ocr_image_text_with_timeout(
     image_bytes: bytes, timeout: float | None = None,
 ) -> str:
-    """Run OCR with a watchdog and a consecutive-timeout circuit breaker.
-
-    RapidOCR/ONNX can hang on rare pathological images.  The worker runs in
-    a daemon thread so the caller can return and mark the page failed; after
-    several consecutive hangs the remaining pages fail fast instead of
-    spawning more stuck threads.
-    """
+    """Run OCR in a child process with a hard timeout and circuit breaker."""
     global _consecutive_timeouts, _breaker_reason
     timeout = timeout or config.OCR_TIMEOUT_SECONDS
     with _timeout_state_lock:
         if _breaker_reason:
             raise OCRTimeoutError(_breaker_reason)
 
-    result: dict[str, object] = {}
-
-    def _run():
-        try:
-            result["text"] = ocr_image_text(image_bytes)
-        except Exception as exc:  # noqa: BLE001 - reported by the caller
-            result["error"] = exc
-
-    thread = threading.Thread(
-        target=_run, name="ocr-watchdog", daemon=True,
+    project_root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..")
     )
-    thread.start()
-    thread.join(timeout)
-    if thread.is_alive():
-        with _timeout_state_lock:
-            _consecutive_timeouts += 1
-            if _consecutive_timeouts >= config.OCR_TIMEOUT_BREAKER:
-                _breaker_reason = (
-                    "OCR engine circuit breaker tripped after "
-                    f"{_consecutive_timeouts} consecutive timeouts"
-                )
-        print(
-            f"[OCR] page timed out after {timeout:.0f}s; "
-            "marking it failed and continuing.",
-            flush=True,
-        )
-        raise OCRTimeoutError(f"OCR timed out after {timeout:.0f}s")
+    work_dir = tempfile.mkdtemp(prefix="ics-ocr-")
+    input_path = os.path.join(work_dir, "page.img")
+    output_path = os.path.join(work_dir, "result.json")
+    try:
+        with open(input_path, "wb") as f:
+            f.write(image_bytes)
+        try:
+            proc = subprocess.run(
+                [
+                    sys.executable, "-m", "src.ai.ocr_worker",
+                    input_path, output_path,
+                ],
+                cwd=project_root,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            with _timeout_state_lock:
+                _consecutive_timeouts += 1
+                if _consecutive_timeouts >= config.OCR_TIMEOUT_BREAKER:
+                    _breaker_reason = (
+                        "OCR engine circuit breaker tripped after "
+                        f"{_consecutive_timeouts} consecutive timeouts"
+                    )
+            print(
+                f"[OCR] page timed out after {timeout:.0f}s; "
+                "killed it and continuing.",
+                flush=True,
+            )
+            raise OCRTimeoutError(f"OCR timed out after {timeout:.0f}s")
 
-    with _timeout_state_lock:
-        _consecutive_timeouts = 0
-    if "error" in result:
-        raise result["error"]  # type: ignore[misc]
-    return str(result.get("text") or "")
+        if proc.returncode != 0:
+            detail = (proc.stderr or b"").decode("utf-8", "replace")[-500:]
+            raise RuntimeError(
+                f"OCR worker exited {proc.returncode}: {detail}"
+            )
+        with open(output_path, encoding="utf-8") as f:
+            result = json.load(f)
+        if "error" in result:
+            raise RuntimeError(str(result["error"]))
+        with _timeout_state_lock:
+            _consecutive_timeouts = 0
+        return str(result.get("text") or "")
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
