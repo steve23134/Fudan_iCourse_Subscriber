@@ -140,6 +140,10 @@ def _smtp_candidates() -> list[tuple[str, int, str]]:
         candidates.append((host, 587, "starttls"))
     elif security == "starttls":
         candidates.append((host, 465, "ssl"))
+    if host == "smtp.office365.com":
+        candidates.append(("smtp-mail.outlook.com", 587, "starttls"))
+    elif host == "smtp-mail.outlook.com":
+        candidates.append(("smtp.office365.com", 587, "starttls"))
     if host == "mail.fudan.edu.cn" and ("mail.fudan.edu.cn", 25, "starttls") not in candidates:
         candidates.append(("mail.fudan.edu.cn", 25, "starttls"))
 
@@ -186,6 +190,16 @@ def _smtp_auth_hint() -> str:
             "SMTP 认证失败（535）。QQ 邮箱的 SMTP_PASSWORD 必须填写"
             "16 位 SMTP 授权码，不是 QQ 登录密码。"
         )
+    if domain in (
+        "outlook.com", "hotmail.com", "live.com", "msn.com",
+        "outlook.jp", "office365.com", "onmicrosoft.com",
+    ):
+        return (
+            "SMTP 认证失败（535）。Outlook 需要 Microsoft 账户的"
+            "应用专用密码；如果服务器提示 basic authentication "
+            "disabled，则该账户只支持 OAuth2，当前密码式 SMTP 登录"
+            "无法使用。"
+        )
     return (
         "SMTP 认证失败（535）。请检查 SMTP_EMAIL / SMTP_PASSWORD，"
         "并确认邮箱服务商已开启 SMTP 客户端登录。"
@@ -204,7 +218,10 @@ def send_message(msg, *, raise_on_failure: bool = False) -> bool:
     so a failed export is visible in Actions).
     """
     errors: list[str] = []
+    auth_failed_hosts: set[str] = set()
     for host, port, security in _smtp_candidates():
+        if host in auth_failed_hosts:
+            continue
         label = f"{host}:{port} ({security})"
         for attempt in range(2):
             try:
@@ -221,10 +238,12 @@ def send_message(msg, *, raise_on_failure: bool = False) -> bool:
                 hint = _smtp_auth_hint()
                 print(f"[Emailer] {label}: {hint} Server said: {exc}")
                 errors.append(f"{label}: {hint}")
-                # A wrong credential will not improve on another port.
+                auth_failed_hosts.add(host)
+                # A wrong credential will not improve on another port.  A
+                # different Outlook endpoint is still worth one try.
                 if raise_on_failure:
                     raise RuntimeError(hint) from exc
-                return False
+                continue
             except Exception as exc:
                 print(
                     f"[Emailer] {label} attempt {attempt + 1}/2 failed: "

@@ -39,8 +39,8 @@
 | `DASHSCOPE_API_KEY` | ⬜ | ModelScope 平台 API Key | `ms-xxxxxxxx` |
 | `DEEPSEEK_API_KEY` | ⬜ | DeepSeek API Key（推荐） | `sk-xxxxxxxx` |
 | `GEMINI_API_KEY` | ⬜ | Gemini API Key | `AIza...` |
-| `SMTP_EMAIL` | ✅ | 用于发送邮件的邮箱（QQ 邮箱或复旦学生邮箱） | `123456@qq.com` / `22307110000@m.fudan.edu.cn` |
-| `SMTP_PASSWORD` | ✅ | QQ 邮箱填 SMTP **授权码**；复旦学生邮箱填邮箱客户端密码（不是 UIS 密码） | `abcdefghijklmnop` |
+| `SMTP_EMAIL` | ✅ | 用于发送邮件的邮箱（QQ、复旦学生邮箱或 Outlook） | `123456@qq.com` / `22307110000@m.fudan.edu.cn` / `you@outlook.com` |
+| `SMTP_PASSWORD` | ✅ | QQ 填 SMTP **授权码**；复旦填邮箱客户端密码；Outlook 填应用专用密码 | `abcdefghijklmnop` |
 | `RECEIVER_EMAIL` | ✅ | 接收摘要邮件的邮箱 | `you@m.fudan.edu.com` |
 
 > 至少配置一个 LLM API Key（DASHSCOPE、DEEPSEEK 或 GEMINI）。程序按配置顺序自动回退尝试。如果需要选择其他的LLM供应商，可以在`src\runtime\config.py`路径下自定义供应商。
@@ -69,6 +69,7 @@
 
 - **QQ 邮箱**：登录 [QQ 邮箱](https://mail.qq.com) → 设置 → 账户与安全 → 安全设置，开启 SMTP 服务并生成 16 位**授权码**，填入 `SMTP_PASSWORD`。
 - **复旦学生邮箱**（`@m.fudan.edu.cn`）：使用腾讯企业邮服务器 `smtp.exmail.qq.com:465`，`SMTP_PASSWORD` 填邮箱客户端密码（与网页版邮箱登录密码一致，不是 UIS 统一身份认证密码）。
+- **Outlook**（`@outlook.com` / `@hotmail.com` / `@live.com`）：自动使用 `smtp.office365.com:587` STARTTLS，备用 `smtp-mail.outlook.com:587`；`SMTP_PASSWORD` 填 Microsoft 账户的**应用专用密码**。如果返回 `basic authentication disabled`，说明该账户只允许 OAuth2，密码式 SMTP 无法使用。
 
 如果服务商使用非标准服务器，可以额外配置以下可选 Secrets 覆盖自动选择：
 

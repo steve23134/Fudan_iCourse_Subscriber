@@ -138,6 +138,10 @@ def _default_smtp_endpoint(email: str) -> tuple[str, int, str]:
         "outlook.com": ("smtp.office365.com", 587, "starttls"),
         "hotmail.com": ("smtp.office365.com", 587, "starttls"),
         "live.com": ("smtp.office365.com", 587, "starttls"),
+        "msn.com": ("smtp.office365.com", 587, "starttls"),
+        "outlook.jp": ("smtp.office365.com", 587, "starttls"),
+        "office365.com": ("smtp.office365.com", 587, "starttls"),
+        "onmicrosoft.com": ("smtp.office365.com", 587, "starttls"),
         # m.fudan.edu.cn is hosted by Tencent Exmail (MX: mxbiz*.qq.com).
         "m.fudan.edu.cn": ("smtp.exmail.qq.com", 465, "ssl"),
         # Staff/legacy Fudan mail runs on Coremail.
