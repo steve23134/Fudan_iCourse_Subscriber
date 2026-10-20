@@ -47,7 +47,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from src.api import icourse
-from src.ai.ocr import ocr_image_text
+from src.ai.ocr import OCRTimeoutError, ocr_image_text_with_timeout
 from src.ai.ppt_dedup import clean_ppt_text, compute_dhash, dedup_dhash, is_invalid_page, match_garbage
 from src.media.store import MediaStore
 
@@ -371,7 +371,13 @@ class PPTPipeline:
         screens would look artificially slow.
         """
         try:
-            text = ocr_image_text(image_bytes)
+            text = ocr_image_text_with_timeout(image_bytes)
+        except OCRTimeoutError as e:
+            print(f"      page {page_num}: OCR timeout: {e}", flush=True)
+            self._db.update_ppt_page(sub_id, page_num, None, "failed")
+            if self._reporter:
+                self._reporter.ocr_progress_tick(sub_id)
+            return page_num, "failed"
         except Exception as e:
             print(f"      page {page_num}: OCR error "
                   f"{type(e).__name__}: {e}", flush=True)

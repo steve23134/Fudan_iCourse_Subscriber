@@ -218,6 +218,13 @@ OCR_MAX_WORKERS = int(os.environ.get("OCR_MAX_WORKERS", "8"))
 # Fixed cap — no dynamic CPU-based adjustment.  RapidOCR is single-threaded;
 # more than 2 concurrent workers don't increase throughput on 4-core runners.
 OCR_MAX_TARGET = int(os.environ.get("OCR_MAX_TARGET", "2"))
+# A single pathological screenshot must not block the whole nightly run.
+# Normal 1280x720 pages finish in ~1s; 45s is a generous watchdog.
+OCR_TIMEOUT_SECONDS = _env_int("OCR_TIMEOUT_SECONDS", 45)
+OCR_MAX_PIXELS = _env_int("OCR_MAX_PIXELS", 20_000_000)
+# After this many consecutive OCR timeouts the engine is considered wedged
+# and remaining pages fail fast instead of spawning more stuck threads.
+OCR_TIMEOUT_BREAKER = _env_int("OCR_TIMEOUT_BREAKER", 3)
 # Two concurrent ffmpeg audio extractions: the current lecture being
 # transcribed + one pre-decoded for the next lecture.  Bandwidth-fair sharing
 # at 20 MB/s split = ~10 MB/s each.
