@@ -68,6 +68,18 @@ def _check_session(client: ICourseClient) -> None:
     client._userinfo = None
 
 
+def _lecture_age_days(lecture: dict) -> int | None:
+    raw = (
+        (lecture.get("date") or "").strip()
+        or (lecture.get("sub_title") or "").strip()[:10]
+    )
+    try:
+        lecture_date = date.fromisoformat(raw[:10])
+    except ValueError:
+        return None
+    return (date.today() - lecture_date).days
+
+
 def _enumerate_lectures(client: ICourseClient, db: Database,
                         reporter: Reporter) -> list[tuple[str, str, dict]]:
     """Sync, fast: list every (course_id, course_title, lecture) we'll
@@ -114,32 +126,40 @@ def _enumerate_lectures(client: ICourseClient, db: Database,
             lectures = deduped
 
             known_processed = db.get_processed_sub_ids(course_id)
-            new_lectures = [
-                lec for lec in lectures
-                if lec.get("has_playback")
-                and str(lec["sub_id"]) not in known_processed
-            ]
+            new_lectures = []
+            for lec in lectures:
+                if not lec.get("has_playback"):
+                    continue
+                if str(lec["sub_id"]) in known_processed:
+                    continue
+                age = _lecture_age_days(lec)
+                if age is not None and age > config.RETRY_MAX_AGE_DAYS:
+                    reporter.info(
+                        f"    [Skip] ancient lecture "
+                        f"{lec.get('sub_title') or lec['sub_id']} "
+                        f"({age} days old)"
+                    )
+                    db.insert_lecture(
+                        str(lec["sub_id"]), course_id,
+                        lec.get("sub_title", ""), lec.get("date", ""),
+                    )
+                    db.mark_processed(str(lec["sub_id"]))
+                    db.clear_error(str(lec["sub_id"]))
+                    continue
+                new_lectures.append(lec)
             unprocessed = db.get_unprocessed_lectures(course_id)
             new_ids = {str(lec["sub_id"]) for lec in new_lectures}
             retry_only = []
             for u in unprocessed:
                 if u["sub_id"] in new_ids:
                     continue
-                raw_date = (
-                    (u.get("date") or "").strip()
-                    or (u.get("sub_title") or "").strip()[:10]
-                )
-                try:
-                    lecture_date = date.fromisoformat(raw_date[:10])
-                except ValueError:
-                    lecture_date = None
-                if (lecture_date is not None
-                        and (date.today() - lecture_date).days
-                        > config.RETRY_MAX_AGE_DAYS):
+                age = _lecture_age_days(u)
+                if (age is not None
+                        and age > config.RETRY_MAX_AGE_DAYS):
                     reporter.info(
                         f"    [Skip] ancient retry lecture "
                         f"{u.get('sub_title') or u['sub_id']} "
-                        f"(>{config.RETRY_MAX_AGE_DAYS} days)"
+                        f"({age} days old)"
                     )
                     db.mark_processed(u["sub_id"])
                     db.clear_error(u["sub_id"])
