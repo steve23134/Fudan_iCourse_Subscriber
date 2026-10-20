@@ -125,7 +125,10 @@ def _enumerate_lectures(client: ICourseClient, db: Database,
             for u in unprocessed:
                 if u["sub_id"] in new_ids:
                     continue
-                raw_date = (u.get("date") or "").strip()
+                raw_date = (
+                    (u.get("date") or "").strip()
+                    or (u.get("sub_title") or "").strip()[:10]
+                )
                 try:
                     lecture_date = date.fromisoformat(raw_date[:10])
                 except ValueError:
