@@ -177,7 +177,7 @@ SMTP_USERNAME = os.environ.get("SMTP_USERNAME", "").strip() or SMTP_EMAIL
 SMTP_TIMEOUT = _env_int("SMTP_TIMEOUT", 30)
 # Daily summaries are sent as PDF attachments, one PDF per lecture.  Keep
 # the number of attachments per email small for mail-provider size limits.
-EMAIL_PDF_MAX_ATTACHMENTS = _env_int("EMAIL_PDF_MAX_ATTACHMENTS", 4)
+EMAIL_PDF_MAX_ATTACHMENTS = _env_int("EMAIL_PDF_MAX_ATTACHMENTS", 50)
 
 # Database & Storage
 DATA_DIR = os.environ.get("DATA_DIR", "data")

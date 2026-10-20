@@ -269,7 +269,6 @@ def _send_email(emailer: Emailer | None, db: Database, reporter: Reporter,
         if not emailer.send(
             email_items,
             on_batch_sent=_mark_batch_sent,
-            neutral_metadata=True,
         ):
             reporter.email_failed()
     except Exception:
