@@ -15,6 +15,7 @@ Anything more interesting belongs in one of ``src/*`` modules.
 
 import time
 import traceback
+from datetime import date
 
 from src.runtime import config
 from src.data.database import Database
@@ -120,11 +121,31 @@ def _enumerate_lectures(client: ICourseClient, db: Database,
             ]
             unprocessed = db.get_unprocessed_lectures(course_id)
             new_ids = {str(lec["sub_id"]) for lec in new_lectures}
-            retry_only = [
-                {"sub_id": u["sub_id"], "sub_title": u["sub_title"],
-                 "date": u["date"]}
-                for u in unprocessed if u["sub_id"] not in new_ids
-            ]
+            retry_only = []
+            for u in unprocessed:
+                if u["sub_id"] in new_ids:
+                    continue
+                raw_date = (u.get("date") or "").strip()
+                try:
+                    lecture_date = date.fromisoformat(raw_date[:10])
+                except ValueError:
+                    lecture_date = None
+                if (lecture_date is not None
+                        and (date.today() - lecture_date).days
+                        > config.RETRY_MAX_AGE_DAYS):
+                    reporter.info(
+                        f"    [Skip] ancient retry lecture "
+                        f"{u.get('sub_title') or u['sub_id']} "
+                        f"(>{config.RETRY_MAX_AGE_DAYS} days)"
+                    )
+                    db.mark_processed(u["sub_id"])
+                    db.clear_error(u["sub_id"])
+                    continue
+                retry_only.append({
+                    "sub_id": u["sub_id"],
+                    "sub_title": u["sub_title"],
+                    "date": u["date"],
+                })
             new_lectures.extend(retry_only)
             reporter.course_new_count(len(new_lectures))
             if not new_lectures:

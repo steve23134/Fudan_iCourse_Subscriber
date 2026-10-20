@@ -10,6 +10,7 @@ import io
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -115,19 +116,33 @@ def ocr_image_text_with_timeout(
     try:
         with open(input_path, "wb") as f:
             f.write(image_bytes)
+        popen_kwargs = {}
+        if os.name != "nt":
+            popen_kwargs["start_new_session"] = True
+        proc = subprocess.Popen(
+            [
+                sys.executable, "-m", "src.ai.ocr_worker",
+                input_path, output_path,
+            ],
+            cwd=project_root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            **popen_kwargs,
+        )
         try:
-            proc = subprocess.run(
-                [
-                    sys.executable, "-m", "src.ai.ocr_worker",
-                    input_path, output_path,
-                ],
-                cwd=project_root,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=timeout,
-                check=False,
-            )
+            _stdout, stderr = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
+            if os.name != "nt":
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except Exception:
+                    proc.kill()
+            else:
+                proc.kill()
+            try:
+                proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
             with _timeout_state_lock:
                 _consecutive_timeouts += 1
                 if _consecutive_timeouts >= config.OCR_TIMEOUT_BREAKER:
@@ -143,7 +158,7 @@ def ocr_image_text_with_timeout(
             raise OCRTimeoutError(f"OCR timed out after {timeout:.0f}s")
 
         if proc.returncode != 0:
-            detail = (proc.stderr or b"").decode("utf-8", "replace")[-500:]
+            detail = (stderr or b"").decode("utf-8", "replace")[-500:]
             raise RuntimeError(
                 f"OCR worker exited {proc.returncode}: {detail}"
             )
