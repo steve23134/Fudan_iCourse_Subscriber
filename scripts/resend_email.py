@@ -26,6 +26,10 @@ def main() -> None:
     parser.add_argument("--sub-ids", default="")
     parser.add_argument("--all", action="store_true",
                         help="Resend every summarized lecture")
+    parser.add_argument("--limit", type=int, default=0,
+                        help="Only resend the first N matching lectures")
+    parser.add_argument("--non-neutral", action="store_true",
+                        help="Use real course names in subject/body/filenames")
     parser.add_argument("--subject-prefix", default="[补发] ")
     args = parser.parse_args()
 
@@ -61,6 +65,8 @@ def main() -> None:
         params.extend(sub_ids)
     query += " ORDER BY c.title, l.date, l.sub_id"
     rows = [dict(r) for r in db.conn.execute(query, params).fetchall()]
+    if args.limit > 0:
+        rows = rows[:args.limit]
     if not rows:
         print("[Resend] no matching summarized lectures.")
         return
@@ -74,7 +80,7 @@ def main() -> None:
     ok = emailer.send(
         rows, on_batch_sent=_mark,
         subject_prefix=args.subject_prefix,
-        neutral_metadata=True,
+        neutral_metadata=not args.non_neutral,
     )
     print(f"[Resend] {'done' if ok else 'FAILED'}: {len(rows)} lecture(s)")
     if not ok:

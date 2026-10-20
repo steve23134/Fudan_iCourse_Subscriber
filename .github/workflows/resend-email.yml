@@ -23,6 +23,16 @@ on:
         required: false
         default: false
         type: boolean
+      non_neutral:
+        description: "Use real course names in subject/body/filenames"
+        required: false
+        default: false
+        type: boolean
+      limit:
+        description: "Optional maximum number of lectures (0 = all)"
+        required: false
+        default: "0"
+        type: string
 
 permissions:
   contents: read
@@ -84,9 +94,17 @@ jobs:
         run: |
           ALL_FLAG=""
           if [ "${{ inputs.all }}" = "true" ]; then ALL_FLAG="--all"; fi
+          NON_NEUTRAL_FLAG=""
+          if [ "${{ inputs.non_neutral }}" = "true" ]; then
+            NON_NEUTRAL_FLAG="--non-neutral"
+          fi
+          LIMIT="${{ inputs.limit }}"
+          if [ -z "$LIMIT" ]; then LIMIT=0; fi
           python -u scripts/resend_email.py \
             --db data/icourse.db \
             --since "${{ inputs.since }}" \
             --course-id "${{ inputs.course_id }}" \
             --sub-ids "${{ inputs.sub_ids }}" \
+            --limit "$LIMIT" \
+            $NON_NEUTRAL_FLAG \
             $ALL_FLAG
