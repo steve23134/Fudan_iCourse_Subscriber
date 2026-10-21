@@ -3,7 +3,7 @@
 import os
 import sqlite3
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from src.runtime import config
 from src.data.schema import (
@@ -493,6 +493,84 @@ class Database:
                      AND l.summary IS NOT NULL""",
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def get_content_audit_candidates(
+        self, course_ids: list[str], *,
+        lookback_days: int = 7,
+        limit: int = 15,
+        now: datetime | None = None,
+    ) -> list[dict]:
+        """Lectures in the last N days whose transcript or summary is missing."""
+        if not course_ids:
+            return []
+        now = now or datetime.now()
+        placeholders = ",".join("?" * len(course_ids))
+        query = f"""
+            SELECT l.*, c.title AS course_title, c.teacher
+            FROM lectures l
+            JOIN courses c ON l.course_id = c.course_id
+            WHERE l.course_id IN ({placeholders})
+              AND (
+                l.transcript IS NULL OR TRIM(l.transcript) = ''
+                OR l.summary IS NULL OR TRIM(l.summary) = ''
+              )
+            ORDER BY l.date DESC, l.sub_id DESC
+        """
+        with self._lock:
+            rows = self.conn.execute(query, course_ids).fetchall()
+
+        cutoff = (now - timedelta(days=lookback_days)).date()
+        out: list[dict] = []
+        for row in rows:
+            item = dict(row)
+            raw_date = (
+                (item.get("date") or "").strip()
+                or (item.get("sub_title") or "").strip()[:10]
+            )
+            try:
+                lecture_date = datetime.fromisoformat(raw_date[:10]).date()
+            except ValueError:
+                continue
+            if lecture_date < cutoff:
+                continue
+            retry_raw = (item.get("content_next_retry_at") or "").strip()
+            if retry_raw:
+                try:
+                    if datetime.fromisoformat(retry_raw) > now:
+                        continue
+                except ValueError:
+                    pass
+            out.append(item)
+            if len(out) >= limit:
+                break
+        return out
+
+    def mark_content_audit(self, sub_id: str, next_retry_at: str,
+                           checked_at: str | None = None):
+        """Record an incomplete audit and its next retry time."""
+        checked_at = checked_at or datetime.now().isoformat()
+        with self._lock, self.conn:
+            self.conn.execute(
+                """UPDATE lectures
+                   SET content_checked_at = ?,
+                       content_next_retry_at = ?,
+                       content_audit_count = COALESCE(content_audit_count, 0) + 1
+                   WHERE sub_id = ?""",
+                (checked_at, next_retry_at, sub_id),
+            )
+
+    def complete_content_audit(self, sub_id: str,
+                               checked_at: str | None = None):
+        checked_at = checked_at or datetime.now().isoformat()
+        with self._lock, self.conn:
+            self.conn.execute(
+                """UPDATE lectures
+                   SET content_checked_at = ?,
+                       content_next_retry_at = NULL,
+                       content_audit_count = 0
+                   WHERE sub_id = ?""",
+                (checked_at, sub_id),
+            )
 
     def sync_dates_from_sub(self) -> int:
         """Fix date rows where the stored value is wrong or badly formatted.

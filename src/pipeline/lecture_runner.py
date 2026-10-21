@@ -76,7 +76,9 @@ class LectureRunner:
     # ── Public entry point ──────────────────────────────────────────────
 
     def run(self, course_id: str, course_title: str, lecture: dict,
-            next_info: Optional[tuple[str, str]] = None) -> Optional[str]:
+            next_info: Optional[tuple[str, str]] = None,
+            *, force_transcript: bool = False,
+            refresh_summary: bool = True) -> Optional[str]:
         """Process one lecture.  Returns the summary text or None.
 
         ``next_info``: ``(course_id, sub_id)`` of the next lecture, used to
@@ -91,7 +93,7 @@ class LectureRunner:
 
         existing = self._db.get_lecture(sub_id)
         # ── Phase A — short-circuit if a summary already exists ─────────
-        if self._has_summary(existing):
+        if self._has_summary(existing) and not force_transcript:
             self._reporter.lecture_skip_v2_done(
                 sub_title, len(existing["summary"])
             )
@@ -150,6 +152,17 @@ class LectureRunner:
             self._release_audio(sub_id)
             self._db.mark_processed(sub_id)
             self._db.clear_error(sub_id)
+            return None
+
+        # Audit mode can fill a missing transcript without replacing an
+        # existing summary.
+        if existing and existing.get("summary") and not refresh_summary:
+            self._reporter.info(
+                "    Transcript updated; keeping existing summary."
+            )
+            self._db.mark_processed(sub_id)
+            self._db.clear_error(sub_id)
+            self._release_audio(sub_id)
             return None
 
         summary = self._summarize(

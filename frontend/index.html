@@ -288,7 +288,13 @@
 
   <!-- ─── LECTURES ─── -->
   <div x-show="view === 'lectures'" class="view-enter max-w-2xl mx-auto p-4">
-    <p x-show="currentCourse?.teacher" class="text-sm text-gray-500 mb-3" x-text="currentCourse?.teacher"></p>
+    <div class="flex items-center justify-between gap-2 mb-3">
+      <p x-show="currentCourse?.teacher" class="text-sm text-gray-500" x-text="currentCourse?.teacher"></p>
+      <button @click="triggerContentAudit()" :disabled="auditTriggering"
+              class="text-xs text-blue-600 border border-blue-200 rounded-lg px-3 py-1.5 hover:bg-blue-50 disabled:opacity-50">
+        <span x-text="auditTriggering ? '触发中…' : '检测待补充内容'"></span>
+      </button>
+    </div>
 
     <div x-show="lectures.length === 0" class="text-center py-16 text-gray-400">
       <p>No lectures recorded yet.</p>
@@ -324,6 +330,10 @@
              class="text-xs text-gray-400 mt-1.5">
             PPT 识别内容可用，暂无摘要
           </p>
+          <p x-show="contentAuditLabel(lec)" class="text-xs text-amber-700 mt-1.5"
+             x-text="contentAuditLabel(lec)"></p>
+          <p x-show="auditRetryLabel(lec)" class="text-[11px] text-gray-400 mt-0.5"
+             x-text="auditRetryLabel(lec)"></p>
           <!-- Error detail -->
           <p x-show="lec.state === 'failed' && lec.error_msg"
              class="text-xs text-red-400 mt-1 truncate" x-text="lec.error_msg"></p>

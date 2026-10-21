@@ -224,6 +224,8 @@ function _getLectures(courseId) {
   const rows = _queryAll(`
     SELECT l.sub_id, l.sub_title, l.date, l.summary, l.processed_at,
            l.error_stage, l.error_msg, l.summary_model, l.transcript,
+           l.content_checked_at, l.content_next_retry_at,
+           l.content_audit_count,
            CASE WHEN l.summary IS NOT NULL AND TRIM(l.summary) != ''
                 THEN 1 ELSE 0 END AS has_summary,
            CASE WHEN l.transcript IS NOT NULL AND TRIM(l.transcript) != ''

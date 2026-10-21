@@ -255,6 +255,7 @@ document.addEventListener("alpine:init", () => {
     mediaActive: 0,
     mediaStats: null, mediaStatsLoading: false,
     pruneTargetMb: 700, pruneKeepRecent: 2, pruneTriggering: false,
+    auditTriggering: false,
     detailView: "summary",
     searchQuery: "", searchResults: [],
     searchCourseFilterQuery: "", searchSelectedCourseIds: [],
@@ -510,6 +511,23 @@ document.addEventListener("alpine:init", () => {
       if (lec.has_transcript) parts.push("转录");
       if (lec.has_ppt) parts.push("PPT");
       return parts.length ? parts.join(" + ") : "No Content";
+    },
+    contentAuditLabel(lec) {
+      if (lec.has_summary && lec.has_transcript) return "";
+      if (lec.has_summary && !lec.has_transcript) {
+        return "已有摘要，等待录屏后补转录";
+      }
+      if (lec.has_transcript && !lec.has_summary) {
+        return "已有转录，等待补摘要";
+      }
+      if (lec.has_ppt) {
+        return "等待录屏，巡检会自动补转录和摘要";
+      }
+      return "等待补充内容";
+    },
+    auditRetryLabel(lec) {
+      if (!lec.content_next_retry_at) return "";
+      return "下次巡检约 " + this.relTime(lec.content_next_retry_at);
     },
 
     async loadPptImage(page) {
@@ -824,6 +842,30 @@ document.addEventListener("alpine:init", () => {
     async refresh() {
       const c = _loadCreds();
       if (c) { await this._loadDB(c); this._toast("Refreshed", "success"); }
+    },
+
+    async triggerContentAudit() {
+      if (this.auditTriggering || !this.currentCourse) return;
+      const creds = _loadCreds();
+      if (!creds?.token) {
+        this._toast("未登录或 PAT 缺失", "error");
+        return;
+      }
+      this.auditTriggering = true;
+      try {
+        await ICS.github.triggerContentAuditWorkflow(
+          this.repoOwner, this.repoName, "main", creds.token,
+          this.currentCourse.course_id, 15,
+        );
+        this._toast(
+          "已触发内容巡检，后台会检查最近 7 天的缺转录/摘要课次",
+          "success",
+        );
+      } catch (e) {
+        this._toast(e?.message || "巡检触发失败", "error");
+      } finally {
+        this.auditTriggering = false;
+      }
     },
 
     async testAndSave() {

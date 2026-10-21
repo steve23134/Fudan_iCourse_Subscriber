@@ -386,6 +386,35 @@ async function _triggerPruneWorkflow(
   throw new Error(`GitHub API error ${res.status}: ${body}`);
 }
 
+async function _triggerContentAuditWorkflow(
+  owner, repo, ref, token, courseId, limit
+) {
+  const url = `${_GH_API}/repos/${owner}/${repo}/actions/workflows/content-audit.yml/dispatches`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { ..._ghHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ref: ref || "main",
+      inputs: {
+        course_ids: String(courseId || ""),
+        limit: String(limit || 15),
+        lookback_days: "7",
+        llm_cutoff: "",
+        dry_run: "false",
+      },
+    }),
+  });
+  if (res.status === 204) return;
+  const body = await res.text();
+  if (res.status === 403 || res.status === 404) {
+    throw new Error(
+      "无法触发内容巡检 workflow。请确认 PAT 已开启 Actions: Read and write。" +
+      `服务端返回：${res.status} ${body}`
+    );
+  }
+  throw new Error(`GitHub API error ${res.status}: ${body}`);
+}
+
 window.ICS.github = {
   detectRepo: _detectRepo,
   getLatestCommitSha: _getLatestCommitSha,
@@ -395,6 +424,7 @@ window.ICS.github = {
   fetchMediaStats: _fetchMediaStats,
   triggerExportWorkflow: _triggerExportWorkflow,
   triggerPruneWorkflow: _triggerPruneWorkflow,
+  triggerContentAuditWorkflow: _triggerContentAuditWorkflow,
   triggerDeleteWorkflow: _triggerDeleteWorkflow,
   triggerSingleRunWorkflow: _triggerSingleRunWorkflow,
   getRepoPublicKey: _getRepoPublicKey,

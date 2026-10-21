@@ -76,10 +76,12 @@ def merge(local_path: str, remote_path: str):
                 INSERT OR IGNORE INTO main.lectures
                     (sub_id, course_id, sub_title, date, transcript, summary,
                      processed_at, emailed_at, error_msg, error_count, error_stage,
-                     summary_model)
+                     summary_model, content_checked_at, content_next_retry_at,
+                     content_audit_count)
                 SELECT sub_id, course_id, sub_title, date, transcript, summary,
                        processed_at, emailed_at, error_msg, error_count, error_stage,
-                       summary_model
+                       summary_model, content_checked_at, content_next_retry_at,
+                       content_audit_count
                 FROM local.lectures
             """)
 
@@ -107,7 +109,25 @@ def merge(local_path: str, remote_path: str):
                         WHEN COALESCE(l.processed_at, main.lectures.processed_at) IS NOT NULL
                         THEN NULL
                         ELSE COALESCE(l.error_stage, main.lectures.error_stage)
-                    END
+                    END,
+                    content_checked_at = CASE
+                        WHEN l.content_checked_at IS NOT NULL
+                         AND (main.lectures.content_checked_at IS NULL
+                              OR l.content_checked_at > main.lectures.content_checked_at)
+                        THEN l.content_checked_at
+                        ELSE main.lectures.content_checked_at END,
+                    content_next_retry_at = CASE
+                        WHEN l.content_checked_at IS NOT NULL
+                         AND (main.lectures.content_checked_at IS NULL
+                              OR l.content_checked_at > main.lectures.content_checked_at)
+                        THEN l.content_next_retry_at
+                        ELSE main.lectures.content_next_retry_at END,
+                    content_audit_count = CASE
+                        WHEN l.content_checked_at IS NOT NULL
+                         AND (main.lectures.content_checked_at IS NULL
+                              OR l.content_checked_at > main.lectures.content_checked_at)
+                        THEN l.content_audit_count
+                        ELSE main.lectures.content_audit_count END
                 FROM local.lectures l
                 WHERE main.lectures.sub_id = l.sub_id
             """)

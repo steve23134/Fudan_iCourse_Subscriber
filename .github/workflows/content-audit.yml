@@ -1,0 +1,232 @@
+name: Content Audit
+
+on:
+  schedule:
+    # GitHub cron is UTC; these are 08:00, 12:05, 21:00, 01:00 Asia/Shanghai.
+    - cron: "0 0 * * *"
+    - cron: "5 4 * * *"
+    - cron: "0 13 * * *"
+    - cron: "0 17 * * *"
+  workflow_dispatch:
+    inputs:
+      course_ids:
+        description: "Optional comma-separated course IDs"
+        required: false
+        default: ""
+        type: string
+      limit:
+        description: "Maximum candidates this run"
+        required: false
+        default: "15"
+        type: string
+      lookback_days:
+        description: "Lookback window in days"
+        required: false
+        default: "7"
+        type: string
+      llm_cutoff:
+        description: "Optional local HH:MM cutoff for new LLM calls"
+        required: false
+        default: ""
+        type: string
+      dry_run:
+        description: "Only list candidates"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: media-maintenance
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache Python packages
+        id: cache-pip
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.pythonLocation }}/lib/python*/site-packages
+          key: pip-${{ hashFiles('requirements.txt') }}
+
+      - name: Install Python dependencies
+        if: steps.cache-pip.outputs.cache-hit != 'true'
+        run: pip install -r requirements.txt
+
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Cache ASR models
+        id: cache-models
+        uses: actions/cache@v4
+        with:
+          path: |
+            sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/
+            silero_vad.onnx
+          key: asr-models-sense-voice-2024-07-17
+
+      - name: Download ASR models
+        if: steps.cache-models.outputs.cache-hit != 'true'
+        run: |
+          wget -q https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2
+          tar xf sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2
+          rm sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2
+          wget -q https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx
+
+      - name: Cache RapidOCR models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/rapidocr
+          key: rapidocr-onnx-default-v1
+
+      - name: Install PDF dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fonts-noto-cjk libpango-1.0-0 libcairo2
+          pip install weasyprint pygments
+          sudo mkdir -p /usr/local/share/fonts/custom
+          sudo cp assets/MSYH.TTC /usr/local/share/fonts/custom/
+          sudo cp assets/MSYHBD.TTC /usr/local/share/fonts/custom/
+          sudo cp assets/MSYHL.TTC /usr/local/share/fonts/custom/
+          sudo fc-cache -fv
+
+      - name: Fetch database from data branch
+        run: |
+          mkdir -p data
+          git fetch --depth=1 origin "+refs/heads/data:refs/remotes/origin/data"
+          if git cat-file -e origin/data:data/icourse-index.enc 2>/dev/null; then
+            mkdir -p data/sharded/shards
+            git show origin/data:data/icourse-index.enc > data/sharded/icourse-index.enc
+            for path in $(git ls-tree -r --name-only origin/data | grep '^data/shards/'); do
+              git show "origin/data:$path" > "data/sharded/shards/$(basename "$path")"
+            done
+          else
+            echo "::error::No sharded database found on data branch."
+            exit 1
+          fi
+
+      - name: Decode database
+        env:
+          STUID: ${{ secrets.STUID }}
+          UISPSW: ${{ secrets.UISPSW }}
+        run: python scripts/db_shard.py reassemble data/sharded data/icourse.db
+
+      - name: Record database state
+        id: db-before
+        run: |
+          if [ -f data/icourse.db ]; then
+            echo "hash=$(md5sum data/icourse.db | cut -d' ' -f1)" >> $GITHUB_OUTPUT
+          else
+            echo "hash=none" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run content audit
+        env:
+          StuId: ${{ secrets.STUID }}
+          UISPsw: ${{ secrets.UISPSW }}
+          COURSE_IDS: ${{ secrets.COURSE_IDS }}
+          SMTP_EMAIL: ${{ secrets.SMTP_EMAIL }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_SECURITY: ${{ secrets.SMTP_SECURITY }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SECRETS_CONTEXT: ${{ toJSON(secrets) }}
+        run: |
+          eval "$(python scripts/provider_env.py)"
+          unset SECRETS_CONTEXT
+          CUTOFF="${{ inputs.llm_cutoff }}"
+          if [ -z "$CUTOFF" ]; then
+            case "${{ github.event.schedule }}" in
+              "0 0 * * *") CUTOFF="08:50" ;;
+              "5 4 * * *") CUTOFF="13:50" ;;
+            esac
+          fi
+          LIMIT="${{ inputs.limit }}"; [ -z "$LIMIT" ] && LIMIT=15
+          LOOKBACK="${{ inputs.lookback_days }}"; [ -z "$LOOKBACK" ] && LOOKBACK=7
+          DRY_FLAG=""
+          if [ "${{ inputs.dry_run }}" = "true" ]; then DRY_FLAG="--dry-run"; fi
+          python -u scripts/content_audit.py \
+            --db data/icourse.db \
+            --course-ids "${{ inputs.course_ids }}" \
+            --limit "$LIMIT" \
+            --lookback-days "$LOOKBACK" \
+            --llm-cutoff "$CUTOFF" \
+            $DRY_FLAG
+
+      - name: Deploy database to data branch
+        if: ${{ always() && inputs.dry_run != true }}
+        env:
+          STUID: ${{ secrets.STUID }}
+          UISPSW: ${{ secrets.UISPSW }}
+          COURSE_IDS: ${{ secrets.COURSE_IDS }}
+          SUBSCRIBED_COURSE_IDS: ${{ secrets.COURSE_IDS }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MEDIA_BRANCH: media
+          MEDIA_CAP_MB: "800"
+          MEDIA_PRUNE_TARGET_MB: "700"
+          MEDIA_KEEP_RECENT: "2"
+        run: |
+          if [ ! -f data/icourse.db ]; then exit 0; fi
+          AFTER=$(md5sum data/icourse.db | cut -d' ' -f1)
+          if [ "$AFTER" = "${{ steps.db-before.outputs.hash }}" ] && \
+             [ -z "$(find data/media -type f -name '*.enc' 2>/dev/null | head -n 1)" ]; then
+            echo "Database unchanged and no new media, skipping commit."
+            exit 0
+          fi
+
+          git fetch origin data --depth=1 2>/dev/null || true
+          DEPLOY_DB=data/icourse.db
+          if git rev-parse origin/data >/dev/null 2>&1 && \
+             git cat-file -e origin/data:data/icourse-index.enc 2>/dev/null; then
+            rm -rf data/remote_sharded
+            mkdir -p data/remote_sharded/shards
+            git show origin/data:data/icourse-index.enc > data/remote_sharded/icourse-index.enc
+            for path in $(git ls-tree -r --name-only origin/data | grep '^data/shards/'); do
+              base=$(basename "$path")
+              git show "origin/data:$path" > "data/remote_sharded/shards/$base"
+            done
+            python scripts/db_shard.py reassemble data/remote_sharded data/remote.db
+            python scripts/merge_db.py data/icourse.db data/remote.db
+            DEPLOY_DB=data/remote.db
+          fi
+
+          python scripts/finalize_media.py \
+            --db "$DEPLOY_DB" \
+            --media-dir data/media \
+            --cap-mb "$MEDIA_CAP_MB" \
+            --target-mb "$MEDIA_PRUNE_TARGET_MB" \
+            --keep-recent "$MEDIA_KEEP_RECENT"
+
+          rm -rf data/sharded_out
+          mkdir -p data/sharded_out
+          python scripts/db_shard.py shard "$DEPLOY_DB" data/sharded_out
+
+          rm -rf /tmp/db_deploy
+          mkdir -p /tmp/db_deploy/data/shards
+          cp data/sharded_out/icourse-index.enc /tmp/db_deploy/data/
+          cp data/sharded_out/shards/*.db.gz.enc /tmp/db_deploy/data/shards/
+          cd /tmp/db_deploy
+          git init -q
+          git checkout -q -b data
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/
+          git commit -q -m "chore: content audit update"
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git"
+          git push --force origin data
