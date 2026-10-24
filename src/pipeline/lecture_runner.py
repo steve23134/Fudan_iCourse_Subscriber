@@ -107,6 +107,23 @@ class LectureRunner:
                 return None
             return existing["summary"]
 
+        # Image-only courses deliberately keep PPT screenshots but never
+        # invoke transcriber, OCR, or the summary model.
+        if config.is_image_only_course(course_title):
+            stats = self._ppt.submit_image_only(
+                self._client, course_id, sub_id,
+            )
+            self._db.mark_processed(sub_id)
+            self._db.clear_error(sub_id)
+            elapsed = time.time() - t_start
+            self._reporter.lecture_done(course_title, sub_title, elapsed)
+            if stats.image_only == 0 and stats.failed > 0:
+                self._db.update_error(
+                    sub_id, "image_only",
+                    "PPT screenshots could not be saved",
+                )
+            return None
+
         # ── Phase B — submit PPT pipeline (fetch + dedup, no OCR yet) ──
         # OCR is deferred (defer_ocr=True) so ASR in Phase D gets exclusive
         # CPU.  OCR will be submitted in Phase E (handle.drain()).
@@ -145,7 +162,11 @@ class LectureRunner:
         # by the next lecture's own PPTPipeline.submit().
         if next_info:
             next_course, next_sub = next_info
-            self._ppt.prefetch_and_ocr(self._client, next_course, next_sub)
+            next_title = self._db.get_course_title(next_course)
+            if not config.is_image_only_course(next_title):
+                self._ppt.prefetch_and_ocr(
+                    self._client, next_course, next_sub,
+                )
 
         # ── Phase F — bucketed-prompt LLM summary ──────────────────────
         if not transcript.strip():
@@ -214,6 +235,8 @@ class LectureRunner:
         if next_info is None:
             return
         next_course, next_sub = next_info
+        next_title = self._db.get_course_title(next_course)
+        image_only = config.is_image_only_course(next_title)
         # Image prefetch is always useful; the audio download — a full
         # ffmpeg pull of the lecture — only when the next lecture will
         # actually be ASR-transcribed.  Both are idempotent so repeated
@@ -221,8 +244,12 @@ class LectureRunner:
         # until a download slot frees.
         self._scheduler.prefetch_lecture(
             self._client, next_course, next_sub,
-            audio=self._needs_audio(next_sub),
-            skip_images=self._db.get_resolved_ppt_page_nums(next_sub),
+            audio=False if image_only else self._needs_audio(next_sub),
+            skip_images=(
+                self._db.get_ppt_media_page_nums(next_sub)
+                if image_only
+                else self._db.get_resolved_ppt_page_nums(next_sub)
+            ),
         )
 
     def _needs_audio(self, sub_id: str) -> bool:

@@ -403,7 +403,9 @@
                   :class="detailView === 'ppt'
                     ? 'bg-blue-600 text-white'
                     : 'bg-gray-100 text-gray-600 hover:bg-gray-200'">
-            PPT 图文
+            <span x-text="currentLecture.has_image_only
+              ? 'PPT 截图'
+              : 'PPT 图文'"></span>
           </button>
         </div>
 
@@ -422,11 +424,18 @@
 
         <!-- PPT OCR + original screenshot, side by side on desktop. -->
         <div x-show="detailView === 'ppt'" class="space-y-5 text-sm">
-          <p x-show="currentPptPages.length === 0" class="text-gray-400">
-            暂无 PPT 识别数据。
+          <p x-show="currentLecture.has_image_only"
+             class="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+            该课程按截图模式保存，已去重，未执行 OCR。
+          </p>
+          <p x-show="currentPptPages.length === 0" class="text-gray-400"
+             x-text="currentLecture.has_image_only
+               ? '暂无 PPT 截图。'
+               : '暂无 PPT 识别数据。'">
           </p>
           <template x-for="page in currentPptPages" :key="page.page_num">
-            <div class="ppt-page-card">
+            <div class="ppt-page-card"
+                 :class="page.text ? '' : 'image-only'">
               <div class="ppt-image-col ppt-page-image" :data-page="page.page_num">
                 <div class="text-xs text-gray-400 mb-1"
                      x-text="'[页 ' + page.page_num + ' @ ' + formatPptTimestamp(page.created_sec) + ']'">
@@ -455,7 +464,7 @@
                      class="text-[11px] text-gray-400 mt-1"
                      x-text="page.img_width + ' × ' + page.img_height + ' · 点击查看原图'"></div>
               </div>
-              <div class="ppt-text-col">
+              <div x-show="page.text" class="ppt-text-col">
                 <pre class="whitespace-pre-wrap text-gray-700 font-sans"
                      x-text="page.text || ''"></pre>
               </div>

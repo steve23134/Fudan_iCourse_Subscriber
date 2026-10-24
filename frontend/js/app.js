@@ -534,6 +534,7 @@ document.addEventListener("alpine:init", () => {
       return Number.isFinite(first) && Date.now() - first >= 7 * 86400000;
     },
     contentAuditLabel(lec) {
+      if (lec.has_image_only) return "";
       if (lec.has_summary && lec.has_transcript) return "";
       if (this.auditExpired(lec)) return "";
       if (lec.has_summary && !lec.has_transcript) {
@@ -548,6 +549,7 @@ document.addEventListener("alpine:init", () => {
       return "等待补充内容";
     },
     auditRetryLabel(lec) {
+      if (lec.has_image_only) return "";
       if (lec.has_summary && lec.has_transcript) return "";
       if (!lec.content_next_retry_at || this.auditExpired(lec)) return "";
       var raw = lec.content_next_retry_at;

@@ -491,6 +491,69 @@ class Database:
             ).fetchall()
         return {int(row["page_num"]) for row in rows}
 
+    def get_ppt_media_page_nums(self, sub_id: str) -> set[int]:
+        """Pages with media, including intentionally evicted screenshots."""
+        with self._lock:
+            rows = self.conn.execute(
+                """SELECT page_num
+                   FROM ppt_pages
+                   WHERE sub_id = ?
+                     AND (
+                       (img_sha IS NOT NULL AND img_sha != '')
+                       OR media_evicted_at IS NOT NULL
+                     )""",
+                (sub_id,),
+            ).fetchall()
+        return {int(row["page_num"]) for row in rows}
+
+    def prepare_ppt_pages_for_image_only(self, sub_id: str) -> int:
+        """Re-open unresolved image-only pages for screenshot backfill.
+
+        Existing screenshots and intentionally pruned pages are preserved;
+        only rows that never produced a blob are reset to pending.
+        """
+        with self._lock, self.conn:
+            cur = self.conn.execute(
+                """UPDATE ppt_pages
+                   SET ocr_status = 'pending', text = NULL, ocr_at = NULL
+                   WHERE sub_id = ?
+                     AND (img_sha IS NULL OR img_sha = '')
+                     AND media_evicted_at IS NULL
+                     AND ocr_status != 'pending'
+                     AND NOT (
+                       ocr_status = 'done'
+                       AND text IS NOT NULL AND TRIM(text) != ''
+                     )""",
+                (sub_id,),
+            )
+            return cur.rowcount or 0
+
+    def get_course_ids_by_titles(self, titles: list[str]) -> list[str]:
+        """Resolve exact course titles to IDs from the current database."""
+        normalized = [
+            " ".join(str(title).split()) for title in titles
+            if str(title).strip()
+        ]
+        if not normalized:
+            return []
+        placeholders = ",".join("?" * len(normalized))
+        with self._lock:
+            rows = self.conn.execute(
+                f"""SELECT course_id, title
+                    FROM courses
+                    WHERE title IN ({placeholders})""",
+                normalized,
+            ).fetchall()
+        return [str(row["course_id"]) for row in rows]
+
+    def get_course_title(self, course_id: str) -> str:
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT title FROM courses WHERE course_id = ?",
+                (str(course_id),),
+            ).fetchone()
+        return str(row["title"] or "") if row else ""
+
     def get_done_ppt_pages(self, sub_id: str) -> list[dict]:
         """Successfully-OCR'd pages, sorted by time. Used by the bucketer."""
         with self._lock:

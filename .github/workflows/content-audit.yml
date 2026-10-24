@@ -14,6 +14,11 @@ on:
         required: false
         default: ""
         type: string
+      course_titles:
+        description: "Optional comma-separated exact course titles"
+        required: false
+        default: ""
+        type: string
       limit:
         description: "Maximum candidates this run"
         required: false
@@ -142,7 +147,8 @@ jobs:
       - name: Check audit candidates
         id: candidates
         env:
-          COURSE_IDS: ${{ inputs.course_ids || secrets.COURSE_IDS }}
+          INPUT_COURSE_IDS: ${{ inputs.course_ids }}
+          COURSE_IDS: ${{ secrets.COURSE_IDS }}
         run: |
           FORCE_FLAG=""
           if [ "${{ steps.params.outputs.force_now }}" = "true" ]; then
@@ -150,7 +156,8 @@ jobs:
           fi
           OUTPUT=$(python -u scripts/content_audit.py \
             --db data/icourse.db \
-            --course-ids "$COURSE_IDS" \
+            --course-ids "$INPUT_COURSE_IDS" \
+            --course-titles "${{ inputs.course_titles }}" \
             --limit "${{ steps.params.outputs.limit }}" \
             --lookback-days "${{ steps.params.outputs.lookback }}" \
             --llm-cutoff "${{ steps.params.outputs.cutoff }}" \
@@ -235,6 +242,7 @@ jobs:
           python -u scripts/content_audit.py \
             --db data/icourse.db \
             --course-ids "${{ inputs.course_ids }}" \
+            --course-titles "${{ inputs.course_titles }}" \
             --limit "${{ steps.params.outputs.limit }}" \
             --lookback-days "${{ steps.params.outputs.lookback }}" \
             --llm-cutoff "${{ steps.params.outputs.cutoff }}" \

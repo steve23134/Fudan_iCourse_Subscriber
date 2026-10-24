@@ -72,6 +72,7 @@ class PPTStats:
     invalid: int     # matched a classroom-noise pattern
     dedupped: int    # dropped by garbage-catalog match or pairwise dHash dedup
     failed: int      # download or OCR error
+    image_only: int = 0  # screenshots saved without OCR
 
 
 class PPTAsyncHandle:
@@ -217,6 +218,60 @@ class PPTPipeline:
             course_id=course_id,
         )
 
+    def submit_image_only(
+        self, client: "ICourseClient", course_id: str, sub_id: str,
+    ) -> PPTStats:
+        """Fetch, deduplicate, and store screenshots without invoking OCR."""
+        sub_id = str(sub_id)
+        self._join_prefetch(sub_id)
+        self._db.prepare_ppt_pages_for_image_only(sub_id)
+        images, counters = self._collect_survivors(
+            client, course_id, sub_id, image_only=True,
+        )
+
+        saved = 0
+        failed = counters["failed"]
+        for page_num, image_bytes in images.items():
+            try:
+                media = self._media_store.save(image_bytes)
+                self._db.update_ppt_page(
+                    sub_id, page_num, None, "image_only",
+                )
+                self._db.update_ppt_page_media(
+                    sub_id, page_num,
+                    img_sha=media["img_sha"],
+                    img_mime=media["img_mime"],
+                    img_width=media["img_width"],
+                    img_height=media["img_height"],
+                    img_bytes=media["img_bytes"],
+                )
+                saved += 1
+            except Exception as exc:
+                self._db.update_ppt_page(sub_id, page_num, None, "failed")
+                failed += 1
+                if self._reporter:
+                    self._reporter.info(
+                        f"    [Image-only] page {page_num} save failed: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+
+        self._scheduler.image_cache.discard(sub_id)
+        stats = PPTStats(
+            total=counters["total"],
+            inserted=counters["inserted"],
+            done=0,
+            invalid=0,
+            dedupped=counters["dedupped"],
+            failed=failed,
+            image_only=saved,
+        )
+        if self._reporter:
+            self._reporter.info(
+                f"    PPT image-only: {saved} saved, "
+                f"{stats.dedupped} dedup'd, {failed} failed; OCR skipped."
+            )
+        return stats
+
     def prefetch_and_ocr(self, client: "ICourseClient", course_id: str,
                           sub_id: str) -> None:
         """Kick off download + dedup + OCR for a lecture in a background
@@ -284,6 +339,7 @@ class PPTPipeline:
 
     def _collect_survivors(
         self, client: "ICourseClient", course_id: str, sub_id: str,
+        *, image_only: bool = False,
     ) -> tuple[dict[int, bytes], dict]:
         """Stages 1-3: register pages, gather images for *pending* rows
         only, then garbage-catalog + pairwise dHash dedup.
@@ -300,7 +356,11 @@ class PPTPipeline:
         # Stage 1 — register pending rows from the current PPT list.
         # ``schedule`` is idempotent; usually the previous lecture's
         # prefetch already warmed the cache.
-        resolved_pages = self._db.get_resolved_ppt_page_nums(sub_id)
+        resolved_pages = (
+            self._db.get_ppt_media_page_nums(sub_id)
+            if image_only
+            else self._db.get_resolved_ppt_page_nums(sub_id)
+        )
         self._scheduler.image_cache.schedule(
             client, course_id, sub_id, skip_pages=resolved_pages,
         )
@@ -340,7 +400,7 @@ class PPTPipeline:
             dhashes.append(dh)
             page_at.append(pn)
 
-        garbage_idx = set(match_garbage(dhashes))
+        garbage_idx = set() if image_only else set(match_garbage(dhashes))
         survivor_items = [
             dh for i, dh in enumerate(dhashes) if i not in garbage_idx
         ]

@@ -184,6 +184,10 @@ function _getCourses() {
                    SELECT 1 FROM ppt_pages pp
                    WHERE pp.sub_id = l.sub_id AND pp.ocr_status = 'done'
                      AND pp.text IS NOT NULL AND TRIM(pp.text) != ''
+                 ) OR EXISTS(
+                   SELECT 1 FROM ppt_pages pp
+                   WHERE pp.sub_id = l.sub_id AND pp.ocr_status = 'image_only'
+                     AND pp.img_sha IS NOT NULL AND pp.img_sha != ''
                  ) THEN 1 END) AS ppt_count,
              COUNT(CASE WHEN (l.summary IS NOT NULL AND TRIM(l.summary) != '')
                          OR (l.transcript IS NOT NULL AND TRIM(l.transcript) != '')
@@ -191,6 +195,12 @@ function _getCourses() {
                               SELECT 1 FROM ppt_pages pp
                               WHERE pp.sub_id = l.sub_id AND pp.ocr_status = 'done'
                                 AND pp.text IS NOT NULL AND TRIM(pp.text) != ''
+                            )
+                         OR EXISTS(
+                              SELECT 1 FROM ppt_pages pp
+                              WHERE pp.sub_id = l.sub_id
+                                AND pp.ocr_status = 'image_only'
+                                AND pp.img_sha IS NOT NULL AND pp.img_sha != ''
                             ) THEN 1 END) AS content_count,
              COUNT(l.sub_id) AS total_count,
              MAX(COALESCE(l.processed_at, l.date)) AS last_updated
@@ -235,7 +245,15 @@ function _getLectures(courseId) {
                  SELECT 1 FROM ppt_pages pp
                  WHERE pp.sub_id = l.sub_id AND pp.ocr_status = 'done'
                    AND pp.text IS NOT NULL AND TRIM(pp.text) != ''
-               ) THEN 1 ELSE 0 END AS has_ppt
+               ) OR EXISTS(
+                 SELECT 1 FROM ppt_pages pp
+                 WHERE pp.sub_id = l.sub_id AND pp.ocr_status = 'image_only'
+                   AND pp.img_sha IS NOT NULL AND pp.img_sha != ''
+               ) THEN 1 ELSE 0 END AS has_ppt,
+           CASE WHEN EXISTS(
+                 SELECT 1 FROM ppt_pages pp
+                 WHERE pp.sub_id = l.sub_id AND pp.ocr_status = 'image_only'
+               ) THEN 1 ELSE 0 END AS has_image_only
     FROM lectures l WHERE l.course_id = ?
   `, [courseId]);
   // Chronological ascending (earliest first); 第N-M节 breaks intra-day ties so
@@ -271,7 +289,15 @@ function _getLecture(subId) {
                  SELECT 1 FROM ppt_pages pp
                  WHERE pp.sub_id = l.sub_id AND pp.ocr_status = 'done'
                    AND pp.text IS NOT NULL AND TRIM(pp.text) != ''
-               ) THEN 1 ELSE 0 END AS has_ppt
+               ) OR EXISTS(
+                 SELECT 1 FROM ppt_pages pp
+                 WHERE pp.sub_id = l.sub_id AND pp.ocr_status = 'image_only'
+                   AND pp.img_sha IS NOT NULL AND pp.img_sha != ''
+               ) THEN 1 ELSE 0 END AS has_ppt,
+           CASE WHEN EXISTS(
+                 SELECT 1 FROM ppt_pages pp
+                 WHERE pp.sub_id = l.sub_id AND pp.ocr_status = 'image_only'
+               ) THEN 1 ELSE 0 END AS has_image_only
     FROM lectures l JOIN courses c ON l.course_id = c.course_id
     WHERE l.sub_id = ?
   `, [subId]);
@@ -284,15 +310,23 @@ function _getLecture(subId) {
 }
 
 function _getPptPages(subId) {
-  // Only return done pages with non-empty text — keeps the PPT viewer
-  // free of pending placeholders and dropped pages.
+  // Return OCR pages with text plus explicitly image-only screenshot pages.
+  // Pending and deduplicated placeholders stay out of the viewer.
   return _queryAll(`
-    SELECT page_num, created_sec, text, pptimgurl,
+    SELECT page_num, created_sec, text, pptimgurl, ocr_status,
            img_sha, img_mime, img_width, img_height, img_bytes,
            media_evicted_at
     FROM ppt_pages
-    WHERE sub_id = ? AND ocr_status = 'done'
-      AND text IS NOT NULL AND TRIM(text) != ''
+    WHERE sub_id = ? AND (
+      (
+        ocr_status = 'done'
+        AND text IS NOT NULL AND TRIM(text) != ''
+      )
+      OR (
+        ocr_status = 'image_only'
+        AND img_sha IS NOT NULL AND img_sha != ''
+      )
+    )
     ORDER BY created_sec ASC
   `, [subId]);
 }

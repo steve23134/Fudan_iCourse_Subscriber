@@ -99,6 +99,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--db", default=config.DB_PATH)
     parser.add_argument("--course-ids", default="")
+    parser.add_argument("--course-titles", default="")
     parser.add_argument("--limit", type=int, default=15)
     parser.add_argument("--lookback-days", type=int, default=7)
     parser.add_argument("--llm-cutoff", default="")
@@ -107,15 +108,35 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
-    raw_ids = args.course_ids or ",".join(config.COURSE_IDS)
     course_ids = [
-        c.strip() for c in raw_ids.split(",") if c.strip()
+        c.strip() for c in args.course_ids.split(",") if c.strip()
     ]
-    if not course_ids:
-        print("[Audit] no course IDs configured.")
+    course_titles = [
+        title.strip()
+        for title in args.course_titles.split(",")
+        if title.strip()
+    ]
+    if not course_ids and not course_titles:
+        course_ids = list(config.COURSE_IDS)
+    if not course_ids and not course_titles:
+        print("[Audit] no course IDs or titles configured.")
         return
 
     db = Database(args.db)
+    if course_titles:
+        resolved_ids = db.get_course_ids_by_titles(course_titles)
+        course_ids.extend(
+            course_id for course_id in resolved_ids
+            if course_id not in course_ids
+        )
+        print(
+            f"[Audit] resolved titles {course_titles!r} "
+            f"to course IDs {resolved_ids!r}."
+        )
+        if not course_ids:
+            print("[Audit] no matching course titles.")
+            return
+
     candidates = db.get_content_audit_candidates(
         course_ids,
         lookback_days=args.lookback_days,

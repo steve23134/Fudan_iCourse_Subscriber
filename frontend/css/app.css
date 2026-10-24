@@ -80,6 +80,7 @@ mark { background: #fef08a; padding: 0 2px; border-radius: 2px; }
   border-left: 2px solid #e5e7eb;
   padding-left: 12px;
 }
+.ppt-page-card.image-only { grid-template-columns: minmax(0, 1fr); }
 .ppt-image-col { min-width: 0; align-self: start; position: sticky; top: 5rem; }
 .ppt-screenshot {
   display: block;

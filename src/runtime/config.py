@@ -256,6 +256,17 @@ COURSE_IDS = [
     if c.strip()
 ]
 
+# Courses in this set keep PPT screenshots but deliberately skip OCR.  The
+# first entry is a course whose iCourse recording is unavailable but whose
+# screenshot pages remain useful on their own.
+IMAGE_ONLY_COURSE_TITLES = frozenset({
+    "国际关系导论",
+})
+
+
+def is_image_only_course(course_title: str | None) -> bool:
+    return " ".join((course_title or "").split()) in IMAGE_ONLY_COURSE_TITLES
+
 # 学期级课程目录爬取（已弃用 — main.py 现在自动发现所有学期）。
 # 保留此变量仅用于兼容老部署环境，新部署无需设置。
 # 例：CRAWL_TERM=25
