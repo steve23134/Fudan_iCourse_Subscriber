@@ -506,7 +506,9 @@ class Database:
             ).fetchall()
         return {int(row["page_num"]) for row in rows}
 
-    def prepare_ppt_pages_for_image_only(self, sub_id: str) -> int:
+    def prepare_ppt_pages_for_image_only(
+        self, sub_id: str, *, reset_resolved: bool = False,
+    ) -> int:
         """Re-open unresolved image-only pages for screenshot backfill.
 
         Existing screenshots and intentionally pruned pages are preserved;
@@ -523,13 +525,18 @@ class Database:
                      AND ocr_status NOT IN ('done', 'image_only')""",
                 (now, now, sub_id),
             ).rowcount or 0
+            status_clause = (
+                "ocr_status != 'pending'"
+                if reset_resolved
+                else "ocr_status = 'failed'"
+            )
             cur = self.conn.execute(
-                """UPDATE ppt_pages
-                   SET ocr_status = 'pending', text = NULL, ocr_at = NULL
-                   WHERE sub_id = ?
-                     AND (img_sha IS NULL OR img_sha = '')
-                     AND media_evicted_at IS NULL
-                     AND ocr_status = 'failed'""",
+                f"""UPDATE ppt_pages
+                    SET ocr_status = 'pending', text = NULL, ocr_at = NULL
+                    WHERE sub_id = ?
+                      AND (img_sha IS NULL OR img_sha = '')
+                      AND media_evicted_at IS NULL
+                      AND {status_clause}""",
                 (sub_id,),
             )
             return repaired + (cur.rowcount or 0)

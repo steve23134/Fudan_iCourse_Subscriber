@@ -79,7 +79,8 @@ class LectureRunner:
             next_info: Optional[tuple[str, str]] = None,
             *, force_transcript: bool = False,
             refresh_summary: bool = True,
-            can_call_llm: Callable[[], bool] | None = None) -> Optional[str]:
+            can_call_llm: Callable[[], bool] | None = None,
+            reset_image_only: bool = False) -> Optional[str]:
         """Process one lecture.  Returns the summary text or None.
 
         ``next_info``: ``(course_id, sub_id)`` of the next lecture, used to
@@ -112,6 +113,7 @@ class LectureRunner:
         if config.is_image_only_course(course_title):
             stats = self._ppt.submit_image_only(
                 self._client, course_id, sub_id,
+                reset_resolved=reset_image_only,
             )
             self._db.mark_processed(sub_id)
             self._db.clear_error(sub_id)

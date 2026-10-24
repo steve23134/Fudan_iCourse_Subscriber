@@ -105,6 +105,7 @@ def main() -> None:
     parser.add_argument("--llm-cutoff", default="")
     parser.add_argument("--window", default="")
     parser.add_argument("--force-now", action="store_true")
+    parser.add_argument("--reset-image-only", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -210,6 +211,10 @@ def main() -> None:
                     force_transcript=force_transcript,
                     refresh_summary=not has_summary,
                     can_call_llm=lambda: not _llm_blocked(args.llm_cutoff),
+                    reset_image_only=(
+                        args.reset_image_only
+                        or (args.force_now and args.lookback_days > 7)
+                    ),
                 )
             except Exception as exc:
                 reporter.info(

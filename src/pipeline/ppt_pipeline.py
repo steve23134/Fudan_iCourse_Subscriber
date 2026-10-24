@@ -220,11 +220,14 @@ class PPTPipeline:
 
     def submit_image_only(
         self, client: "ICourseClient", course_id: str, sub_id: str,
+        *, reset_resolved: bool = False,
     ) -> PPTStats:
         """Fetch, deduplicate, and store screenshots without invoking OCR."""
         sub_id = str(sub_id)
         self._join_prefetch(sub_id)
-        self._db.prepare_ppt_pages_for_image_only(sub_id)
+        self._db.prepare_ppt_pages_for_image_only(
+            sub_id, reset_resolved=reset_resolved,
+        )
         images, counters = self._collect_survivors(
             client, course_id, sub_id, image_only=True,
         )
