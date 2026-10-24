@@ -7,6 +7,8 @@ import time
 
 import requests
 
+TREE_BATCH_SIZE = 100
+
 
 class MediaBranchClient:
     def __init__(self, repo: str, token: str, branch: str = "media"):
@@ -138,9 +140,17 @@ class MediaBranchClient:
             created += 1
         if not entries:
             return 0
-        new_tree = self.create_tree(entries, base_tree=tree_sha)
+        # GitHub rejects a single create-tree request when the input contains
+        # thousands of files (422 "input too large"). Build it incrementally
+        # so large one-time screenshot backfills remain supported.
+        tree_sha = tree_sha or self.create_tree([])
+        for offset in range(0, len(entries), TREE_BATCH_SIZE):
+            tree_sha = self.create_tree(
+                entries[offset:offset + TREE_BATCH_SIZE],
+                base_tree=tree_sha,
+            )
         parents = [self.get_ref()] if self.get_ref() else []
-        commit_sha = self.create_commit(message, new_tree, parents)
+        commit_sha = self.create_commit(message, tree_sha, parents)
         self.update_ref(commit_sha)
         return created
 
