@@ -42,6 +42,8 @@ def _local_now() -> datetime:
 def _discounted_window_open(now: datetime | None = None) -> bool:
     """True inside the configured half-price API windows with a 10m buffer."""
     now = now or _local_now()
+    if now.weekday() >= 5:
+        return True
     minute = now.hour * 60 + now.minute
     return (
         12 * 60 <= minute < 13 * 60 + 50
