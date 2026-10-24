@@ -40,16 +40,22 @@ jobs:
 
       # GitHub Pages serves JavaScript with max-age=600.  Versioning the
       # local script URLs prevents an old cached app.js from surviving a
-      # deployment and showing stale UI logic.
+      # deployment and showing stale UI logic.  Bump frontend/VERSION using
+      # semantic versions whenever frontend behavior changes.
       - name: Version local scripts
         run: |
-          VERSION=$(git rev-parse --short=12 HEAD)
+          VERSION=$(tr -d '[:space:]' < frontend/VERSION)
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::frontend/VERSION must use x.y.z semantic versioning."
+            exit 1
+          fi
           sed -i "s/?v=dev/?v=${VERSION}/g" frontend/index.html
           if grep -q '?v=dev' frontend/index.html; then
             echo "::error::Unversioned local script URL remains."
             exit 1
           fi
           grep -q "js/app.js?v=${VERSION}" frontend/index.html
+          echo "Frontend version: ${VERSION}"
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

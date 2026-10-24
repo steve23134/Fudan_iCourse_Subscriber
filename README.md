@@ -104,6 +104,9 @@
 
 如果使用 classic PAT，请勾选 `repo` 和 `workflow` scope。
 
+前端当前版本记录在 `frontend/VERSION`，使用语义化版本 `x.y.z`。部署时
+GitHub Actions 会校验格式并自动写入前端脚本的缓存参数。
+
 如果 Actions 返回 `422 Actions has been disabled for this repository`，
 说明 GitHub 因 fork 的 Actions 使用量自动暂停了工作流；即使权限 API 显示
 `enabled: true`，也需要仓库维护者在 Actions 页面点击横幅中的重新启用按钮。
