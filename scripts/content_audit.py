@@ -156,8 +156,9 @@ def main() -> None:
         for title in args.course_titles.split(",")
         if title.strip()
     ]
+    subscribed_ids = list(config.COURSE_IDS)
     if not course_ids and not course_titles:
-        course_ids = list(config.COURSE_IDS)
+        course_ids = subscribed_ids
     if not course_ids and not course_titles:
         print("[Audit] no course IDs or titles configured.")
         return
@@ -165,6 +166,11 @@ def main() -> None:
     db = Database(args.db)
     if course_titles:
         resolved_ids = db.get_course_ids_by_titles(course_titles)
+        if subscribed_ids:
+            resolved_ids = [
+                course_id for course_id in resolved_ids
+                if course_id in subscribed_ids
+            ]
         course_ids.extend(
             course_id for course_id in resolved_ids
             if course_id not in course_ids
