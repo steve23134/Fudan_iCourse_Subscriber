@@ -95,6 +95,45 @@ def _next_retry_at(first_seen_at: str | None) -> str | None:
     return None
 
 
+def _sync_course(
+    client: ICourseClient, db: Database, course_id: str, reporter: Reporter,
+) -> int:
+    """Import one catalog course and its lectures into the local database."""
+    detail = client.get_course_detail(course_id)
+    title = detail.get("title", "")
+    teacher = detail.get("teacher", "")
+    db.upsert_course(course_id, title, teacher)
+    inserted = 0
+    for lecture in detail.get("lectures", []):
+        sub_id = str(lecture.get("sub_id", "")).strip()
+        if not sub_id:
+            continue
+        if db.insert_lecture(
+            sub_id, course_id,
+            lecture.get("sub_title", ""), lecture.get("date", ""),
+        ):
+            inserted += 1
+    reporter.info(
+        f"[Audit] synced course {course_id} ({title}): "
+        f"{len(detail.get('lectures', []))} lecture(s), "
+        f"{inserted} newly registered."
+    )
+    return inserted
+
+
+def _print_candidates(candidates: list[dict]) -> None:
+    print(f"[Audit] {len(candidates)} candidate(s).")
+    for candidate in candidates:
+        print(
+            f"  {candidate['sub_title']} ({candidate['date']}) "
+            f"transcript={_has_text(candidate.get('transcript'))} "
+            f"summary={_has_text(candidate.get('summary'))} "
+            f"first_seen={candidate.get('content_first_seen_at') or '-'} "
+            f"checked={candidate.get('content_checked_at') or '-'} "
+            f"retry={candidate.get('content_next_retry_at') or '-'}"
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--db", default=config.DB_PATH)
@@ -138,24 +177,33 @@ def main() -> None:
             print("[Audit] no matching course titles.")
             return
 
-    candidates = db.get_content_audit_candidates(
-        course_ids,
-        lookback_days=args.lookback_days,
-        limit=args.limit,
-        window=args.window,
-        force_now=args.force_now,
-    )
-    print(f"[Audit] {len(candidates)} candidate(s).")
-    for c in candidates:
+    missing_course_ids = [
+        course_id for course_id in course_ids
+        if not db.has_course(course_id)
+    ]
+    if args.dry_run and missing_course_ids:
         print(
-            f"  {c['sub_title']} ({c['date']}) "
-            f"transcript={_has_text(c.get('transcript'))} "
-            f"summary={_has_text(c.get('summary'))} "
-            f"first_seen={c.get('content_first_seen_at') or '-'} "
-            f"checked={c.get('content_checked_at') or '-'} "
-            f"retry={c.get('content_next_retry_at') or '-'}"
+            f"[Audit] {len(missing_course_ids)} course(s) require sync: "
+            f"{missing_course_ids!r}."
         )
-    if args.dry_run or not candidates:
+        # The workflow uses this count to enable the processing job.  The
+        # real run syncs first, then computes the exact candidate list.
+        print("[Audit] 1 candidate(s).")
+        return
+
+    candidates = (
+        []
+        if missing_course_ids
+        else db.get_content_audit_candidates(
+            course_ids,
+            lookback_days=args.lookback_days,
+            limit=args.limit,
+            window=args.window,
+            force_now=args.force_now,
+        )
+    )
+    _print_candidates(candidates)
+    if args.dry_run or (not candidates and not missing_course_ids):
         return
 
     reporter = Reporter()
@@ -169,6 +217,19 @@ def main() -> None:
     try:
         vpn = login_with_retry()
         client = ICourseClient(vpn)
+        if missing_course_ids:
+            for course_id in missing_course_ids:
+                _sync_course(client, db, course_id, reporter)
+            candidates = db.get_content_audit_candidates(
+                course_ids,
+                lookback_days=args.lookback_days,
+                limit=args.limit,
+                window=args.window,
+                force_now=args.force_now,
+            )
+            _print_candidates(candidates)
+            if not candidates:
+                return
         runner = LectureRunner(
             client, db, scheduler, transcriber, summarizer, reporter,
         )

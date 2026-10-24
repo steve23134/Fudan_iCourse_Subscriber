@@ -552,7 +552,7 @@ class Database:
             ).fetchone()[0]
 
     def get_course_ids_by_titles(self, titles: list[str]) -> list[str]:
-        """Resolve exact course titles to IDs from the current database."""
+        """Resolve exact titles from subscribed courses and the catalog."""
         normalized = [
             " ".join(str(title).split()) for title in titles
             if str(title).strip()
@@ -561,13 +561,21 @@ class Database:
             return []
         placeholders = ",".join("?" * len(normalized))
         with self._lock:
-            rows = self.conn.execute(
+            subscribed = self.conn.execute(
                 f"""SELECT course_id, title
                     FROM courses
                     WHERE title IN ({placeholders})""",
                 normalized,
             ).fetchall()
-        return [str(row["course_id"]) for row in rows]
+            catalog = self.conn.execute(
+                f"""SELECT DISTINCT course_id, title
+                    FROM all_courses
+                    WHERE title IN ({placeholders})""",
+                normalized,
+            ).fetchall()
+        return list(dict.fromkeys(
+            str(row["course_id"]) for row in [*subscribed, *catalog]
+        ))
 
     def get_course_title(self, course_id: str) -> str:
         with self._lock:
@@ -576,6 +584,14 @@ class Database:
                 (str(course_id),),
             ).fetchone()
         return str(row["title"] or "") if row else ""
+
+    def has_course(self, course_id: str) -> bool:
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT 1 FROM courses WHERE course_id = ?",
+                (str(course_id),),
+            ).fetchone()
+        return row is not None
 
     def get_done_ppt_pages(self, sub_id: str) -> list[dict]:
         """Successfully-OCR'd pages, sorted by time. Used by the bucketer."""
