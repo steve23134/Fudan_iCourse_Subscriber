@@ -512,7 +512,17 @@ class Database:
         Existing screenshots and intentionally pruned pages are preserved;
         only rows that never produced a blob are reset to pending.
         """
+        now = datetime.now(timezone.utc).isoformat()
         with self._lock, self.conn:
+            repaired = self.conn.execute(
+                """UPDATE ppt_pages
+                   SET ocr_status = 'image_only', text = NULL, ocr_at = ?,
+                       media_updated_at = ?
+                   WHERE sub_id = ?
+                     AND img_sha IS NOT NULL AND img_sha != ''
+                     AND ocr_status != 'done'""",
+                (now, now, sub_id),
+            ).rowcount or 0
             cur = self.conn.execute(
                 """UPDATE ppt_pages
                    SET ocr_status = 'pending', text = NULL, ocr_at = NULL
@@ -526,7 +536,17 @@ class Database:
                      )""",
                 (sub_id,),
             )
-            return cur.rowcount or 0
+            return repaired + (cur.rowcount or 0)
+
+    def count_image_only_ppt_pages(self, sub_id: str) -> int:
+        with self._lock:
+            return self.conn.execute(
+                """SELECT COUNT(*)
+                   FROM ppt_pages
+                   WHERE sub_id = ? AND ocr_status = 'image_only'
+                     AND img_sha IS NOT NULL AND img_sha != ''""",
+                (sub_id,),
+            ).fetchone()[0]
 
     def get_course_ids_by_titles(self, titles: list[str]) -> list[str]:
         """Resolve exact course titles to IDs from the current database."""

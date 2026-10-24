@@ -256,6 +256,7 @@ class PPTPipeline:
                     )
 
         self._scheduler.image_cache.discard(sub_id)
+        available = self._db.count_image_only_ppt_pages(sub_id)
         stats = PPTStats(
             total=counters["total"],
             inserted=counters["inserted"],
@@ -263,11 +264,12 @@ class PPTPipeline:
             invalid=0,
             dedupped=counters["dedupped"],
             failed=failed,
-            image_only=saved,
+            image_only=available,
         )
         if self._reporter:
             self._reporter.info(
-                f"    PPT image-only: {saved} saved, "
+                f"    PPT image-only: {available} available "
+                f"({saved} newly saved), "
                 f"{stats.dedupped} dedup'd, {failed} failed; OCR skipped."
             )
         return stats
