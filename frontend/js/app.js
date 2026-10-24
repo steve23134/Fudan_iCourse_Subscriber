@@ -255,7 +255,7 @@ document.addEventListener("alpine:init", () => {
     mediaActive: 0,
     mediaStats: null, mediaStatsLoading: false,
     pruneTargetMb: 700, pruneKeepRecent: 2, pruneTriggering: false,
-    auditTriggering: false,
+    auditTriggering: false, auditRunUrl: "", auditRunLabel: "",
     detailView: "summary",
     searchQuery: "", searchResults: [],
     searchCourseFilterQuery: "", searchSelectedCourseIds: [],
@@ -512,8 +512,17 @@ document.addEventListener("alpine:init", () => {
       if (lec.has_ppt) parts.push("PPT");
       return parts.length ? parts.join(" + ") : "No Content";
     },
+    auditExpired(lec) {
+      if (lec.has_summary && lec.has_transcript) return false;
+      var raw = lec.content_first_seen_at;
+      if (!raw) return false;
+      var normalized = /(?:Z|[+-]\d{2}:\d{2})$/.test(raw) ? raw : raw + "Z";
+      var first = new Date(normalized).getTime();
+      return Number.isFinite(first) && Date.now() - first >= 7 * 86400000;
+    },
     contentAuditLabel(lec) {
       if (lec.has_summary && lec.has_transcript) return "";
+      if (this.auditExpired(lec)) return "自动补全期限已结束";
       if (lec.has_summary && !lec.has_transcript) {
         return "已有摘要，等待录屏后补转录";
       }
@@ -526,8 +535,15 @@ document.addEventListener("alpine:init", () => {
       return "等待补充内容";
     },
     auditRetryLabel(lec) {
-      if (!lec.content_next_retry_at) return "";
-      return "下次巡检约 " + this.relTime(lec.content_next_retry_at);
+      if (!lec.content_next_retry_at || this.auditExpired(lec)) return "";
+      var raw = lec.content_next_retry_at;
+      var normalized = /(?:Z|[+-]\d{2}:\d{2})$/.test(raw) ? raw : raw + "Z";
+      var next = new Date(normalized);
+      if (!Number.isFinite(next.getTime())) return "";
+      return "下次巡检约 " + next.toLocaleString("zh-CN", {
+        month: "numeric", day: "numeric",
+        hour: "2-digit", minute: "2-digit",
+      });
     },
 
     async loadPptImage(page) {
@@ -852,15 +868,37 @@ document.addEventListener("alpine:init", () => {
         return;
       }
       this.auditTriggering = true;
+      this.auditRunUrl = "";
+      this.auditRunLabel = "";
       try {
-        await ICS.github.triggerContentAuditWorkflow(
+        const run = await ICS.github.triggerContentAuditWorkflow(
           this.repoOwner, this.repoName, "main", creds.token,
           this.currentCourse.course_id, 15,
         );
-        this._toast(
-          "已触发内容巡检，后台会检查最近 7 天的缺转录/摘要课次",
-          "success",
-        );
+        this.auditRunUrl = run?.html_url || "";
+        if (run?.conclusion === "action_required") {
+          this.auditRunLabel = "等待 GitHub 批准";
+          this._toast(
+            "巡检已提交，但 GitHub 要求先批准本次运行。",
+            "error",
+          );
+        } else if (
+          run?.conclusion && run.conclusion !== "success"
+        ) {
+          this.auditRunLabel = "运行失败";
+          this._toast(
+            `巡检运行失败（${run.conclusion}），请打开运行链接查看日志。`,
+            "error",
+          );
+        } else {
+          this.auditRunLabel = run?.status === "completed"
+            ? "运行已结束"
+            : "运行已排队";
+          this._toast(
+            "已触发立即重检；即使没有录屏，也会先补充 PPT/OCR。",
+            "success",
+          );
+        }
       } catch (e) {
         this._toast(e?.message || "巡检触发失败", "error");
       } finally {

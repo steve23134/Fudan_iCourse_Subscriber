@@ -3,7 +3,7 @@
 import os
 import sqlite3
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from src.runtime import config
 from src.data.schema import (
@@ -65,6 +65,29 @@ class Database:
                     self.conn.execute(
                         f"ALTER TABLE ppt_pages ADD COLUMN {col} {typedef}"
                     )
+
+            # Existing incomplete lectures predate first-seen tracking.  Keep
+            # historical data bounded by backfilling from the last audit time
+            # or, when unavailable, the class date.
+            self.conn.execute(
+                r"""
+                UPDATE lectures
+                SET content_first_seen_at = COALESCE(
+                    NULLIF(content_checked_at, ''),
+                    CASE
+                        WHEN date GLOB '????-??-??'
+                        THEN date || 'T00:00:00+08:00'
+                        WHEN sub_title GLOB '????-??-??*'
+                        THEN substr(sub_title, 1, 10) || 'T00:00:00+08:00'
+                    END
+                )
+                WHERE content_first_seen_at IS NULL
+                  AND (
+                    transcript IS NULL OR TRIM(transcript) = ''
+                    OR summary IS NULL OR TRIM(summary) = ''
+                  )
+                """
+            )
 
     def write_meta(self, key: str, value: str):
         """Persist a key-value pair (e.g. COURSE_IDS from CI secret)."""
@@ -175,9 +198,14 @@ class Database:
         try:
             with self._lock, self.conn:
                 self.conn.execute(
-                    """INSERT INTO lectures (sub_id, course_id, sub_title, date)
-                       VALUES (?, ?, ?, ?)""",
-                    (sub_id, course_id, sub_title, date),
+                    """INSERT INTO lectures
+                           (sub_id, course_id, sub_title, date,
+                            content_first_seen_at)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (
+                        sub_id, course_id, sub_title, date,
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
                 )
             return True
         except sqlite3.IntegrityError:
@@ -499,11 +527,21 @@ class Database:
         lookback_days: int = 7,
         limit: int = 15,
         now: datetime | None = None,
+        window: str = "",
+        force_now: bool = False,
     ) -> list[dict]:
-        """Lectures in the last N days whose transcript or summary is missing."""
+        """Recent lectures whose transcript or summary is missing.
+
+        First-seen lectures are eligible at every retry window for three
+        days.  From day 3 through day 7 they are eligible only at 12:05.
+        After day 7 they leave the automatic retry queue.
+        """
         if not course_ids:
             return []
-        now = now or datetime.now()
+        now = now or datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        now = now.astimezone(timezone.utc)
         placeholders = ",".join("?" * len(course_ids))
         query = f"""
             SELECT l.*, c.title AS course_title, c.teacher
@@ -533,10 +571,19 @@ class Database:
                 continue
             if lecture_date < cutoff:
                 continue
-            retry_raw = (item.get("content_next_retry_at") or "").strip()
-            if retry_raw:
+
+            first_seen_raw = (item.get("content_first_seen_at") or "").strip()
+            if first_seen_raw and not force_now:
                 try:
-                    if datetime.fromisoformat(retry_raw) > now:
+                    first_seen = datetime.fromisoformat(
+                        first_seen_raw.replace("Z", "+00:00")
+                    )
+                    if first_seen.tzinfo is None:
+                        first_seen = first_seen.replace(tzinfo=timezone.utc)
+                    age = now - first_seen.astimezone(timezone.utc)
+                    if age >= timedelta(days=7):
+                        continue
+                    if age >= timedelta(days=3) and window != "12:05":
                         continue
                 except ValueError:
                     pass
@@ -545,10 +592,30 @@ class Database:
                 break
         return out
 
-    def mark_content_audit(self, sub_id: str, next_retry_at: str,
+    def mark_content_first_seen(
+        self, sub_id: str, first_seen_at: str | None = None,
+    ) -> str:
+        """Set the first-seen timestamp once and return the stored value."""
+        first_seen_at = first_seen_at or datetime.now(timezone.utc).isoformat()
+        with self._lock, self.conn:
+            self.conn.execute(
+                """UPDATE lectures
+                   SET content_first_seen_at = COALESCE(
+                       content_first_seen_at, ?
+                   )
+                   WHERE sub_id = ?""",
+                (first_seen_at, sub_id),
+            )
+            row = self.conn.execute(
+                "SELECT content_first_seen_at FROM lectures WHERE sub_id = ?",
+                (sub_id,),
+            ).fetchone()
+        return row["content_first_seen_at"] if row else first_seen_at
+
+    def mark_content_audit(self, sub_id: str, next_retry_at: str | None,
                            checked_at: str | None = None):
         """Record an incomplete audit and its next retry time."""
-        checked_at = checked_at or datetime.now().isoformat()
+        checked_at = checked_at or datetime.now(timezone.utc).isoformat()
         with self._lock, self.conn:
             self.conn.execute(
                 """UPDATE lectures
@@ -561,7 +628,7 @@ class Database:
 
     def complete_content_audit(self, sub_id: str,
                                checked_at: str | None = None):
-        checked_at = checked_at or datetime.now().isoformat()
+        checked_at = checked_at or datetime.now(timezone.utc).isoformat()
         with self._lock, self.conn:
             self.conn.execute(
                 """UPDATE lectures

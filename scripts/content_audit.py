@@ -11,8 +11,7 @@ import argparse
 import os
 import sys
 import time
-from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -32,20 +31,66 @@ def _has_text(value: str | None) -> bool:
     return bool(value and value.strip())
 
 
-def _local_hhmm() -> str:
-    return datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%H:%M")
+SHANGHAI = timezone(timedelta(hours=8))
+RETRY_WINDOWS = ((1, 0), (8, 0), (12, 5), (21, 0))
 
 
-def _cutoff_reached(cutoff: str) -> bool:
-    return bool(cutoff and _local_hhmm() >= cutoff)
+def _local_now() -> datetime:
+    return datetime.now(SHANGHAI)
 
 
-def _next_retry_hours(audit_count: int) -> int:
-    if audit_count <= 0:
-        return 6
-    if audit_count == 1:
-        return 12
-    return 24
+def _discounted_window_open(now: datetime | None = None) -> bool:
+    """True inside the configured half-price API windows with a 10m buffer."""
+    now = now or _local_now()
+    minute = now.hour * 60 + now.minute
+    return (
+        12 * 60 <= minute < 13 * 60 + 50
+        or 18 * 60 <= minute
+        or minute < 8 * 60 + 50
+    )
+
+
+def _llm_blocked(cutoff: str) -> bool:
+    if not _discounted_window_open():
+        return True
+    return bool(cutoff and _local_now().strftime("%H:%M") >= cutoff)
+
+
+def _parse_timestamp(raw: str | None) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _next_retry_at(first_seen_at: str | None) -> str | None:
+    """Return the next allowed scheduled window, or None after seven days."""
+    now_utc = datetime.now(timezone.utc)
+    first_seen = _parse_timestamp(first_seen_at)
+    age = now_utc - first_seen if first_seen else timedelta(0)
+    if age >= timedelta(days=7):
+        return None
+
+    windows = (
+        ((12, 5),)
+        if age >= timedelta(days=3)
+        else RETRY_WINDOWS
+    )
+    local_now = now_utc.astimezone(SHANGHAI)
+    for day_offset in (0, 1):
+        day = local_now.date() + timedelta(days=day_offset)
+        for hour, minute in windows:
+            candidate = datetime(
+                day.year, day.month, day.day, hour, minute, tzinfo=SHANGHAI,
+            )
+            if candidate > local_now:
+                return candidate.astimezone(timezone.utc).isoformat()
+    return None
 
 
 def main() -> None:
@@ -55,6 +100,8 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=15)
     parser.add_argument("--lookback-days", type=int, default=7)
     parser.add_argument("--llm-cutoff", default="")
+    parser.add_argument("--window", default="")
+    parser.add_argument("--force-now", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -71,6 +118,8 @@ def main() -> None:
         course_ids,
         lookback_days=args.lookback_days,
         limit=args.limit,
+        window=args.window,
+        force_now=args.force_now,
     )
     print(f"[Audit] {len(candidates)} candidate(s).")
     for c in candidates:
@@ -78,6 +127,7 @@ def main() -> None:
             f"  {c['sub_title']} ({c['date']}) "
             f"transcript={_has_text(c.get('transcript'))} "
             f"summary={_has_text(c.get('summary'))} "
+            f"first_seen={c.get('content_first_seen_at') or '-'} "
             f"checked={c.get('content_checked_at') or '-'} "
             f"retry={c.get('content_next_retry_at') or '-'}"
         )
@@ -100,55 +150,33 @@ def main() -> None:
         )
 
         def _defer(lecture: dict, row: dict, reason: str) -> None:
-            audit_count = int(row.get("content_audit_count") or 0)
-            next_at = (
-                datetime.now()
-                + timedelta(hours=_next_retry_hours(audit_count))
-            ).isoformat()
+            first_seen = (
+                row.get("content_first_seen_at")
+                or db.mark_content_first_seen(str(lecture["sub_id"]))
+            )
+            next_at = _next_retry_at(first_seen)
             db.mark_content_audit(str(lecture["sub_id"]), next_at)
+            suffix = (
+                f"retry after {next_at}"
+                if next_at
+                else "automatic retry window ended"
+            )
             reporter.info(
-                f"    [Audit] {reason}; retry after {next_at}"
+                f"    [Audit] {reason}; {suffix}"
             )
 
         for lecture in candidates:
-            if (_has_text(lecture.get("summary")) is False
-                    and _cutoff_reached(args.llm_cutoff)):
-                print(
-                    f"[Audit] LLM cutoff {args.llm_cutoff} reached; "
-                    "leaving remaining summaries for the next window."
-                )
-                break
-
             _check_session(client)
             sub_id = str(lecture["sub_id"])
             existing = db.get_lecture(sub_id)
             if existing is None:
                 continue
+            if not existing.get("content_first_seen_at"):
+                db.mark_content_first_seen(sub_id)
+                existing = db.get_lecture(sub_id) or existing
             has_summary = _has_text(existing.get("summary"))
             has_transcript = _has_text(existing.get("transcript"))
             force_transcript = has_summary and not has_transcript
-
-            # A missing recording is the common case.  Probe the video URL
-            # before invoking the full PPT pipeline, otherwise every audit
-            # would re-download hundreds of already-OCR'd screenshots.
-            if not has_transcript:
-                try:
-                    video_url = client.get_video_url(
-                        str(lecture["course_id"]), sub_id,
-                    )
-                except Exception as exc:
-                    reporter.info(
-                        f"    [Audit] video probe failed: "
-                        f"{type(exc).__name__}: {exc}"
-                    )
-                    video_url = None
-                if not video_url:
-                    db.update_error(
-                        sub_id, "no_video", "no playable video URL",
-                    )
-                    _defer(lecture, existing, "still waiting for video")
-                    processed += 1
-                    continue
 
             result = None
             try:
@@ -158,6 +186,7 @@ def main() -> None:
                     lecture,
                     force_transcript=force_transcript,
                     refresh_summary=not has_summary,
+                    can_call_llm=lambda: not _llm_blocked(args.llm_cutoff),
                 )
             except Exception as exc:
                 reporter.info(
@@ -181,7 +210,12 @@ def main() -> None:
                         "summary": result,
                     })
             else:
-                _defer(lecture, updated, "still incomplete")
+                reason = (
+                    "still waiting for video"
+                    if updated.get("error_stage") == "no_video"
+                    else "still incomplete"
+                )
+                _defer(lecture, updated, reason)
             processed += 1
             time.sleep(1)
 

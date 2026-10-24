@@ -389,30 +389,115 @@ async function _triggerPruneWorkflow(
 async function _triggerContentAuditWorkflow(
   owner, repo, ref, token, courseId, limit
 ) {
-  const url = `${_GH_API}/repos/${owner}/${repo}/actions/workflows/content-audit.yml/dispatches`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { ..._ghHeaders(token), "Content-Type": "application/json" },
-    body: JSON.stringify({
-      ref: ref || "main",
-      inputs: {
-        course_ids: String(courseId || ""),
-        limit: String(limit || 15),
-        lookback_days: "7",
-        llm_cutoff: "",
-        dry_run: "false",
-      },
-    }),
-  });
-  if (res.status === 204) return;
-  const body = await res.text();
-  if (res.status === 403 || res.status === 404) {
-    throw new Error(
-      "无法触发内容巡检 workflow。请确认 PAT 已开启 Actions: Read and write。" +
-      `服务端返回：${res.status} ${body}`
-    );
+  const branch = ref || "main";
+  const base = `${_GH_API}/repos/${owner}/${repo}/actions/workflows/content-audit.yml`;
+  let res;
+  try {
+    res = await fetch(base, { headers: _ghHeaders(token) });
+  } catch (e) {
+    throw new Error(`无法连接 GitHub API：${e?.message || e}`);
   }
-  throw new Error(`GitHub API error ${res.status}: ${body}`);
+  if (!res.ok) {
+    const body = await res.text();
+    if (res.status === 401) {
+      throw new Error("GitHub PAT 已失效，请重新生成并保存 Token。");
+    }
+    if (res.status === 403) {
+      throw new Error(
+        "GitHub 拒绝读取 Actions。Fine-grained PAT 需要为当前仓库授予 " +
+        "Actions: Read and write；classic PAT 需要 workflow scope。" +
+        `服务端返回：403 ${body}`
+      );
+    }
+    if (res.status === 404) {
+      throw new Error(
+        "找不到 Content Audit workflow，或 PAT 没有 Actions: Read 权限。" +
+        `服务端返回：404 ${body}`
+      );
+    }
+    throw new Error(`读取 Content Audit workflow 失败：${res.status} ${body}`);
+  }
+
+  const requestedAt = Date.now();
+  try {
+    res = await fetch(`${base}/dispatches`, {
+      method: "POST",
+      headers: { ..._ghHeaders(token), "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ref: branch,
+        inputs: {
+          course_ids: String(courseId || ""),
+          limit: String(limit || 15),
+          lookback_days: "7",
+          llm_cutoff: "",
+          window: "",
+          force_now: "true",
+          dry_run: "false",
+        },
+      }),
+    });
+  } catch (e) {
+    throw new Error(`提交内容巡检请求时网络中断：${e?.message || e}`);
+  }
+  if (res.status !== 204) {
+    const body = await res.text();
+    if (res.status === 401) {
+      throw new Error("GitHub PAT 已失效，请重新登录或更新 Token。");
+    }
+    if (res.status === 403) {
+      throw new Error(
+        "GitHub 拒绝触发 workflow。Fine-grained PAT 需要 " +
+        "Actions: Read and write；classic PAT 需要 workflow scope。" +
+        `服务端返回：403 ${body}`
+      );
+    }
+    if (res.status === 404) {
+      throw new Error(
+        `分支 ${branch} 上不存在 content-audit.yml，或 PAT 缺少 Actions 权限。`
+      );
+    }
+    if (res.status === 422) {
+      throw new Error(
+        "workflow 输入参数与 content-audit.yml 不匹配，通常是前端与 " +
+        `main 分支版本不一致。服务端返回：422 ${body}`
+      );
+    }
+    throw new Error(`GitHub API error ${res.status}: ${body}`);
+  }
+
+  // workflow_dispatch returns 204 without a run ID.  Read the newest
+  // dispatch so the UI can distinguish queued, approval-required, and
+  // failed runs instead of always claiming success.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    try {
+      const runsRes = await fetch(
+        `${base}/runs?event=workflow_dispatch&per_page=5`,
+        { headers: _ghHeaders(token) }
+      );
+      if (runsRes.ok) {
+        const data = await runsRes.json();
+        const run = (data.workflow_runs || []).find((candidate) => {
+          return Date.parse(candidate.created_at) >= requestedAt - 5000;
+        });
+        if (run) {
+          return {
+            id: run.id,
+            status: run.status,
+            conclusion: run.conclusion,
+            html_url: run.html_url,
+          };
+        }
+      }
+    } catch (_) {
+      // The dispatch already succeeded; status lookup is best-effort.
+    }
+  }
+  return {
+    status: "queued",
+    conclusion: null,
+    html_url: `https://github.com/${owner}/${repo}/actions/workflows/content-audit.yml`,
+  };
 }
 
 window.ICS.github = {

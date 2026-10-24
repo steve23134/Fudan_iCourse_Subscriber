@@ -38,7 +38,7 @@ threads pick up refreshed cookies through the shared ``ICourseClient``.
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 from src.ai import bucketer
 from src.pipeline.ppt_pipeline import PPTPipeline
@@ -78,7 +78,8 @@ class LectureRunner:
     def run(self, course_id: str, course_title: str, lecture: dict,
             next_info: Optional[tuple[str, str]] = None,
             *, force_transcript: bool = False,
-            refresh_summary: bool = True) -> Optional[str]:
+            refresh_summary: bool = True,
+            can_call_llm: Callable[[], bool] | None = None) -> Optional[str]:
         """Process one lecture.  Returns the summary text or None.
 
         ``next_info``: ``(course_id, sub_id)`` of the next lecture, used to
@@ -161,6 +162,17 @@ class LectureRunner:
                 "    Transcript updated; keeping existing summary."
             )
             self._db.mark_processed(sub_id)
+            self._db.clear_error(sub_id)
+            self._release_audio(sub_id)
+            return None
+
+        # Cost guard belongs at the actual model boundary, not only before
+        # the lecture starts: ASR/OCR may finish after a discounted window.
+        if can_call_llm is not None and not can_call_llm():
+            self._reporter.info(
+                "    [Audit] LLM window closed; keeping transcript/PPT "
+                "and deferring summary."
+            )
             self._db.clear_error(sub_id)
             self._release_audio(sub_id)
             return None

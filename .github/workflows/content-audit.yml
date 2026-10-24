@@ -29,6 +29,16 @@ on:
         required: false
         default: ""
         type: string
+      window:
+        description: "Optional retry window HH:MM (08:00, 12:05, 21:00, 01:00)"
+        required: false
+        default: ""
+        type: string
+      force_now:
+        description: "Bypass the age and retry-window eligibility checks"
+        required: false
+        default: false
+        type: boolean
       dry_run:
         description: "Only list candidates"
         required: false
@@ -151,22 +161,35 @@ jobs:
           eval "$(python scripts/provider_env.py)"
           unset SECRETS_CONTEXT
           CUTOFF="${{ inputs.llm_cutoff }}"
+          WINDOW="${{ inputs.window }}"
           if [ -z "$CUTOFF" ]; then
             case "${{ github.event.schedule }}" in
               "0 0 * * *") CUTOFF="08:50" ;;
               "5 4 * * *") CUTOFF="13:50" ;;
             esac
           fi
+          if [ -z "$WINDOW" ]; then
+            case "${{ github.event.schedule }}" in
+              "0 0 * * *") WINDOW="08:00" ;;
+              "5 4 * * *") WINDOW="12:05" ;;
+              "0 13 * * *") WINDOW="21:00" ;;
+              "0 17 * * *") WINDOW="01:00" ;;
+            esac
+          fi
           LIMIT="${{ inputs.limit }}"; [ -z "$LIMIT" ] && LIMIT=15
           LOOKBACK="${{ inputs.lookback_days }}"; [ -z "$LOOKBACK" ] && LOOKBACK=7
           DRY_FLAG=""
           if [ "${{ inputs.dry_run }}" = "true" ]; then DRY_FLAG="--dry-run"; fi
+          FORCE_FLAG=""
+          if [ "${{ inputs.force_now }}" = "true" ]; then FORCE_FLAG="--force-now"; fi
           python -u scripts/content_audit.py \
             --db data/icourse.db \
             --course-ids "${{ inputs.course_ids }}" \
             --limit "$LIMIT" \
             --lookback-days "$LOOKBACK" \
             --llm-cutoff "$CUTOFF" \
+            --window "$WINDOW" \
+            $FORCE_FLAG \
             $DRY_FLAG
 
       - name: Deploy database to data branch

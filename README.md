@@ -96,12 +96,21 @@
 
 访问 `https://你的用户名.github.io/Fudan_iCourse_Subscriber/`
 
+前端使用的 Fine-grained PAT 需要对当前仓库授予：
+
+- `Contents: Read and write`：读取加密数据库、导出与删除数据
+- `Actions: Read and write`：立即巡检、导出、清理等 workflow
+- `Secrets: Read and write`：仅在网页修改课程订阅时需要
+
+如果使用 classic PAT，请勾选 `repo` 和 `workflow` scope。
+
 功能介绍：
 - **浏览器端解密**：输入你的凭据，浏览器用 WebCrypto 解密 sql.js 读取 shard 数据库，凭据不离开本地
 - **按课程/课次浏览**：查看每节课的转录和摘要内容
 - **PPT 图文对照**：PPT 识别文本右侧显示对应的高清截图，桌面端并排、手机端上下排列
 - **内容可用性**：摘要、转录、PPT 识别任一存在，该课次就可以正常打开和浏览
 - **存储管理**：在 Settings 中查看 media 分支占用、仓库估算大小，并手动触发清理
+- **内容补全巡检**：新课次前 3 天在 01:00、08:00、12:05、21:00 检查；第 3–7 天仅 12:05 检查；7 天后退出自动重试
 - **导出 PDF**：通过 GitHub Actions 触发导出工作流，生成格式化课程笔记 PDF 并邮件发送
 - **补发邮件**：Actions → **Resend Email**，可重新发送最近已发送但被退信的课次，仍然按课次生成 PDF
 

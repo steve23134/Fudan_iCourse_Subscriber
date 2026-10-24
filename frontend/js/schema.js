@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS lectures (
     processed_at TEXT, emailed_at TEXT,
     error_msg TEXT, error_count INTEGER DEFAULT 0,
     error_stage TEXT, summary_model TEXT,
-    content_checked_at TEXT, content_next_retry_at TEXT,
+    content_first_seen_at TEXT, content_checked_at TEXT,
+    content_next_retry_at TEXT,
     content_audit_count INTEGER DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS ppt_pages (

@@ -76,12 +76,12 @@ def merge(local_path: str, remote_path: str):
                 INSERT OR IGNORE INTO main.lectures
                     (sub_id, course_id, sub_title, date, transcript, summary,
                      processed_at, emailed_at, error_msg, error_count, error_stage,
-                     summary_model, content_checked_at, content_next_retry_at,
-                     content_audit_count)
+                     summary_model, content_first_seen_at, content_checked_at,
+                     content_next_retry_at, content_audit_count)
                 SELECT sub_id, course_id, sub_title, date, transcript, summary,
                        processed_at, emailed_at, error_msg, error_count, error_stage,
-                       summary_model, content_checked_at, content_next_retry_at,
-                       content_audit_count
+                       summary_model, content_first_seen_at, content_checked_at,
+                       content_next_retry_at, content_audit_count
                 FROM local.lectures
             """)
 
@@ -110,6 +110,15 @@ def merge(local_path: str, remote_path: str):
                         THEN NULL
                         ELSE COALESCE(l.error_stage, main.lectures.error_stage)
                     END,
+                    content_first_seen_at = CASE
+                        WHEN l.content_first_seen_at IS NULL
+                        THEN main.lectures.content_first_seen_at
+                        WHEN main.lectures.content_first_seen_at IS NULL
+                        THEN l.content_first_seen_at
+                        WHEN julianday(l.content_first_seen_at)
+                             < julianday(main.lectures.content_first_seen_at)
+                        THEN l.content_first_seen_at
+                        ELSE main.lectures.content_first_seen_at END,
                     content_checked_at = CASE
                         WHEN l.content_checked_at IS NOT NULL
                          AND (main.lectures.content_checked_at IS NULL
