@@ -89,6 +89,38 @@ class Database:
                 """
             )
 
+            # Old deployments could leave a retry timestamp on lectures that
+            # had already left the seven-day audit window, or store an
+            # implausibly distant value.  Keep the content fields, but clear
+            # the stale schedule so the frontend has nothing obsolete to show.
+            self.conn.execute(
+                """
+                UPDATE lectures
+                SET content_next_retry_at = NULL
+                WHERE content_next_retry_at IS NOT NULL
+                  AND (
+                    (
+                        date GLOB '????-??-??'
+                        AND date < date('now', '+8 hours', '-7 days')
+                    )
+                    OR (
+                        content_first_seen_at IS NOT NULL
+                        AND julianday(content_first_seen_at)
+                            <= julianday('now', '-7 days')
+                    )
+                    OR julianday(content_next_retry_at) IS NULL
+                    OR julianday(content_next_retry_at)
+                        <= julianday('now')
+                    OR julianday(content_next_retry_at)
+                        > julianday('now', '+2 days')
+                    OR (
+                        summary IS NOT NULL AND TRIM(summary) != ''
+                        AND transcript IS NOT NULL AND TRIM(transcript) != ''
+                    )
+                  )
+                """
+            )
+
     def write_meta(self, key: str, value: str):
         """Persist a key-value pair (e.g. COURSE_IDS from CI secret)."""
         with self._lock, self.conn:

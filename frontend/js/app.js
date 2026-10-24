@@ -514,6 +514,19 @@ document.addEventListener("alpine:init", () => {
     },
     auditExpired(lec) {
       if (lec.has_summary && lec.has_transcript) return false;
+      var lectureRaw = String(lec.date || "").trim();
+      if (!lectureRaw) {
+        lectureRaw = String(lec.sub_title || "").trim().slice(0, 10);
+      }
+      if (/^\d{4}-\d{2}-\d{2}$/.test(lectureRaw)) {
+        var lectureEnd = new Date(
+          lectureRaw + "T23:59:59+08:00"
+        ).getTime();
+        if (Number.isFinite(lectureEnd)
+            && lectureEnd < Date.now() - 7 * 86400000) {
+          return true;
+        }
+      }
       var raw = lec.content_first_seen_at;
       if (!raw) return false;
       var normalized = /(?:Z|[+-]\d{2}:\d{2})$/.test(raw) ? raw : raw + "Z";
@@ -522,7 +535,7 @@ document.addEventListener("alpine:init", () => {
     },
     contentAuditLabel(lec) {
       if (lec.has_summary && lec.has_transcript) return "";
-      if (this.auditExpired(lec)) return "自动补全期限已结束";
+      if (this.auditExpired(lec)) return "";
       if (lec.has_summary && !lec.has_transcript) {
         return "已有摘要，等待录屏后补转录";
       }
@@ -535,11 +548,16 @@ document.addEventListener("alpine:init", () => {
       return "等待补充内容";
     },
     auditRetryLabel(lec) {
+      if (lec.has_summary && lec.has_transcript) return "";
       if (!lec.content_next_retry_at || this.auditExpired(lec)) return "";
       var raw = lec.content_next_retry_at;
       var normalized = /(?:Z|[+-]\d{2}:\d{2})$/.test(raw) ? raw : raw + "Z";
       var next = new Date(normalized);
       if (!Number.isFinite(next.getTime())) return "";
+      if (next.getTime() <= Date.now()
+          || next.getTime() > Date.now() + 48 * 3600000) {
+        return "";
+      }
       return "下次巡检约 " + next.toLocaleString("zh-CN", {
         month: "numeric", day: "numeric",
         hour: "2-digit", minute: "2-digit",
