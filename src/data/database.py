@@ -536,7 +536,14 @@ class Database:
                     WHERE sub_id = ?
                       AND (img_sha IS NULL OR img_sha = '')
                       AND media_evicted_at IS NULL
-                      AND {status_clause}""",
+                      AND {status_clause}
+                      AND NOT EXISTS (
+                        SELECT 1 FROM ppt_pages ready
+                        WHERE ready.sub_id = ppt_pages.sub_id
+                          AND ready.ocr_status = 'image_only'
+                          AND ready.img_sha IS NOT NULL
+                          AND ready.img_sha != ''
+                      )""",
                 (sub_id,),
             )
             return repaired + (cur.rowcount or 0)
