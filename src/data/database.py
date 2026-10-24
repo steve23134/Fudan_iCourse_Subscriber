@@ -448,6 +448,17 @@ class Database:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def get_resolved_ppt_page_nums(self, sub_id: str) -> set[int]:
+        """Page numbers already resolved and therefore not downloaded again."""
+        with self._lock:
+            rows = self.conn.execute(
+                """SELECT page_num
+                   FROM ppt_pages
+                   WHERE sub_id = ? AND ocr_status != 'pending'""",
+                (sub_id,),
+            ).fetchall()
+        return {int(row["page_num"]) for row in rows}
+
     def get_done_ppt_pages(self, sub_id: str) -> list[dict]:
         """Successfully-OCR'd pages, sorted by time. Used by the bucketer."""
         with self._lock:

@@ -54,8 +54,10 @@ class PrefetchCache:
         # sub_id -> {"items": list[dict]|None, "futures": dict[int, Future]}
         self._cache: dict[str, dict] = {}
 
-    def schedule(self, client, course_id: str, sub_id: str):
+    def schedule(self, client, course_id: str, sub_id: str,
+                 skip_pages: set[int] | None = None):
         sub_id = str(sub_id)
+        skip_pages = skip_pages or set()
         with self._lock:
             if sub_id in self._cache:
                 return
@@ -70,11 +72,15 @@ class PrefetchCache:
         for idx, item in enumerate(ppt_items, start=1):
             item["page_num"] = idx
 
-        if self._reporter and ppt_items:
-            self._reporter.image_progress_start(sub_id, len(ppt_items))
+        download_items = [
+            item for item in ppt_items
+            if int(item["page_num"]) not in skip_pages
+        ]
+        if self._reporter and download_items:
+            self._reporter.image_progress_start(sub_id, len(download_items))
 
         futures: dict[int, Future] = {}
-        for item in ppt_items:
+        for item in download_items:
             futures[item["page_num"]] = self._image_pool.submit(
                 self._download_one, client, item, sub_id,
             )
@@ -411,13 +417,16 @@ class Scheduler:
         )
 
     def prefetch_lecture(self, client, course_id: str, sub_id: str,
-                         *, audio: bool = True) -> None:
+                         *, audio: bool = True,
+                         skip_images: set[int] | None = None) -> None:
         """Schedule image (always) + audio (optional) prefetch for a future
         lecture.  Pass ``audio=False`` when the caller already knows
         transcription won't read the stream (cached or official
         transcript) — the ffmpeg download is a full pull of the lecture
         and would otherwise hold one of the two slots for nothing."""
-        self.image_cache.schedule(client, course_id, sub_id)
+        self.image_cache.schedule(
+            client, course_id, sub_id, skip_pages=skip_images,
+        )
         if audio:
             self.audio_downloader.schedule(client, course_id, sub_id)
 
