@@ -38,6 +38,19 @@ jobs:
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
+      # GitHub Pages serves JavaScript with max-age=600.  Versioning the
+      # local script URLs prevents an old cached app.js from surviving a
+      # deployment and showing stale UI logic.
+      - name: Version local scripts
+        run: |
+          VERSION=$(git rev-parse --short=12 HEAD)
+          sed -i "s/?v=dev/?v=${VERSION}/g" frontend/index.html
+          if grep -q '?v=dev' frontend/index.html; then
+            echo "::error::Unversioned local script URL remains."
+            exit 1
+          fi
+          grep -q "js/app.js?v=${VERSION}" frontend/index.html
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
