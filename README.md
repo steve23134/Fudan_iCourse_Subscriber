@@ -104,6 +104,10 @@
 
 如果使用 classic PAT，请勾选 `repo` 和 `workflow` scope。
 
+如果 Actions 返回 `422 Actions has been disabled for this repository`，
+说明 GitHub 因 fork 的 Actions 使用量自动暂停了工作流；即使权限 API 显示
+`enabled: true`，也需要仓库维护者在 Actions 页面点击横幅中的重新启用按钮。
+
 功能介绍：
 - **浏览器端解密**：输入你的凭据，浏览器用 WebCrypto 解密 sql.js 读取 shard 数据库，凭据不离开本地
 - **按课程/课次浏览**：查看每节课的转录和摘要内容

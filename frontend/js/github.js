@@ -457,6 +457,13 @@ async function _triggerContentAuditWorkflow(
       );
     }
     if (res.status === 422) {
+      if (body.includes("Actions has been disabled for this repository")) {
+        throw new Error(
+          "GitHub 已因该 fork 的 Actions 使用量自动暂停工作流。" +
+          "这不是 PAT 权限问题。请打开仓库 Actions 页面，点击横幅中的 " +
+          `重新启用按钮：https://github.com/${owner}/${repo}/actions`
+        );
+      }
       throw new Error(
         "workflow 输入参数与 content-audit.yml 不匹配，通常是前端与 " +
         `main 分支版本不一致。服务端返回：422 ${body}`

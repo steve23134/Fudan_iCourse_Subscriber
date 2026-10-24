@@ -75,45 +75,6 @@ jobs:
         if: steps.cache-pip.outputs.cache-hit != 'true'
         run: pip install -r requirements.txt
 
-      - name: Install ffmpeg
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
-
-      - name: Cache ASR models
-        id: cache-models
-        uses: actions/cache@v4
-        with:
-          path: |
-            sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/
-            silero_vad.onnx
-          key: asr-models-sense-voice-2024-07-17
-
-      - name: Download ASR models
-        if: steps.cache-models.outputs.cache-hit != 'true'
-        run: |
-          wget -q https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2
-          tar xf sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2
-          rm sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2
-          wget -q https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx
-
-      - name: Cache RapidOCR models
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/rapidocr
-          key: rapidocr-onnx-default-v1
-
-      - name: Install PDF dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y fonts-noto-cjk libpango-1.0-0 libcairo2
-          pip install weasyprint pygments
-          sudo mkdir -p /usr/local/share/fonts/custom
-          sudo cp assets/MSYH.TTC /usr/local/share/fonts/custom/
-          sudo cp assets/MSYHBD.TTC /usr/local/share/fonts/custom/
-          sudo cp assets/MSYHL.TTC /usr/local/share/fonts/custom/
-          sudo fc-cache -fv
-
       - name: Fetch database from data branch
         run: |
           mkdir -p data
@@ -144,7 +105,114 @@ jobs:
             echo "hash=none" >> $GITHUB_OUTPUT
           fi
 
+      - name: Set audit parameters
+        id: params
+        env:
+          INPUT_CUTOFF: ${{ inputs.llm_cutoff }}
+          INPUT_WINDOW: ${{ inputs.window }}
+          INPUT_LIMIT: ${{ inputs.limit }}
+          INPUT_LOOKBACK: ${{ inputs.lookback_days }}
+          INPUT_FORCE: ${{ inputs.force_now }}
+          SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          CUTOFF="$INPUT_CUTOFF"
+          WINDOW="$INPUT_WINDOW"
+          if [ -z "$CUTOFF" ]; then
+            case "$SCHEDULE" in
+              "0 0 * * *") CUTOFF="08:50" ;;
+              "5 4 * * *") CUTOFF="13:50" ;;
+            esac
+          fi
+          if [ -z "$WINDOW" ]; then
+            case "$SCHEDULE" in
+              "0 0 * * *") WINDOW="08:00" ;;
+              "5 4 * * *") WINDOW="12:05" ;;
+              "0 13 * * *") WINDOW="21:00" ;;
+              "0 17 * * *") WINDOW="01:00" ;;
+            esac
+          fi
+          LIMIT="${INPUT_LIMIT:-15}"
+          LOOKBACK="${INPUT_LOOKBACK:-7}"
+          echo "cutoff=$CUTOFF" >> "$GITHUB_OUTPUT"
+          echo "window=$WINDOW" >> "$GITHUB_OUTPUT"
+          echo "limit=$LIMIT" >> "$GITHUB_OUTPUT"
+          echo "lookback=$LOOKBACK" >> "$GITHUB_OUTPUT"
+          echo "force_now=$INPUT_FORCE" >> "$GITHUB_OUTPUT"
+
+      - name: Check audit candidates
+        id: candidates
+        env:
+          COURSE_IDS: ${{ inputs.course_ids || secrets.COURSE_IDS }}
+        run: |
+          FORCE_FLAG=""
+          if [ "${{ steps.params.outputs.force_now }}" = "true" ]; then
+            FORCE_FLAG="--force-now"
+          fi
+          OUTPUT=$(python -u scripts/content_audit.py \
+            --db data/icourse.db \
+            --course-ids "$COURSE_IDS" \
+            --limit "${{ steps.params.outputs.limit }}" \
+            --lookback-days "${{ steps.params.outputs.lookback }}" \
+            --llm-cutoff "${{ steps.params.outputs.cutoff }}" \
+            --window "${{ steps.params.outputs.window }}" \
+            $FORCE_FLAG \
+            --dry-run)
+          printf '%s\n' "$OUTPUT"
+          COUNT=$(printf '%s\n' "$OUTPUT" \
+            | sed -n 's/^\[Audit\] \([0-9]\+\) candidate(s).*/\1/p' \
+            | tail -n 1)
+          if [ -n "$COUNT" ] && [ "$COUNT" -gt 0 ]; then
+            echo "has_candidates=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_candidates=false" >> "$GITHUB_OUTPUT"
+            echo "No content-audit candidates; skipping heavy setup."
+          fi
+
+      - name: Install ffmpeg
+        if: ${{ steps.candidates.outputs.has_candidates == 'true' && inputs.dry_run != true }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Cache ASR models
+        id: cache-models
+        if: ${{ steps.candidates.outputs.has_candidates == 'true' && inputs.dry_run != true }}
+        uses: actions/cache@v4
+        with:
+          path: |
+            sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/
+            silero_vad.onnx
+          key: asr-models-sense-voice-2024-07-17
+
+      - name: Download ASR models
+        if: ${{ steps.candidates.outputs.has_candidates == 'true' && inputs.dry_run != true && steps.cache-models.outputs.cache-hit != 'true' }}
+        run: |
+          wget -q https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2
+          tar xf sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2
+          rm sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2
+          wget -q https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx
+
+      - name: Cache RapidOCR models
+        if: ${{ steps.candidates.outputs.has_candidates == 'true' && inputs.dry_run != true }}
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/rapidocr
+          key: rapidocr-onnx-default-v1
+
+      - name: Install PDF dependencies
+        if: ${{ steps.candidates.outputs.has_candidates == 'true' && inputs.dry_run != true }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fonts-noto-cjk libpango-1.0-0 libcairo2
+          pip install weasyprint pygments
+          sudo mkdir -p /usr/local/share/fonts/custom
+          sudo cp assets/MSYH.TTC /usr/local/share/fonts/custom/
+          sudo cp assets/MSYHBD.TTC /usr/local/share/fonts/custom/
+          sudo cp assets/MSYHL.TTC /usr/local/share/fonts/custom/
+          sudo fc-cache -fv
+
       - name: Run content audit
+        if: ${{ steps.candidates.outputs.has_candidates == 'true' && inputs.dry_run != true }}
         env:
           StuId: ${{ secrets.STUID }}
           UISPsw: ${{ secrets.UISPSW }}
@@ -160,40 +228,21 @@ jobs:
         run: |
           eval "$(python scripts/provider_env.py)"
           unset SECRETS_CONTEXT
-          CUTOFF="${{ inputs.llm_cutoff }}"
-          WINDOW="${{ inputs.window }}"
-          if [ -z "$CUTOFF" ]; then
-            case "${{ github.event.schedule }}" in
-              "0 0 * * *") CUTOFF="08:50" ;;
-              "5 4 * * *") CUTOFF="13:50" ;;
-            esac
-          fi
-          if [ -z "$WINDOW" ]; then
-            case "${{ github.event.schedule }}" in
-              "0 0 * * *") WINDOW="08:00" ;;
-              "5 4 * * *") WINDOW="12:05" ;;
-              "0 13 * * *") WINDOW="21:00" ;;
-              "0 17 * * *") WINDOW="01:00" ;;
-            esac
-          fi
-          LIMIT="${{ inputs.limit }}"; [ -z "$LIMIT" ] && LIMIT=15
-          LOOKBACK="${{ inputs.lookback_days }}"; [ -z "$LOOKBACK" ] && LOOKBACK=7
-          DRY_FLAG=""
-          if [ "${{ inputs.dry_run }}" = "true" ]; then DRY_FLAG="--dry-run"; fi
           FORCE_FLAG=""
-          if [ "${{ inputs.force_now }}" = "true" ]; then FORCE_FLAG="--force-now"; fi
+          if [ "${{ steps.params.outputs.force_now }}" = "true" ]; then
+            FORCE_FLAG="--force-now"
+          fi
           python -u scripts/content_audit.py \
             --db data/icourse.db \
             --course-ids "${{ inputs.course_ids }}" \
-            --limit "$LIMIT" \
-            --lookback-days "$LOOKBACK" \
-            --llm-cutoff "$CUTOFF" \
-            --window "$WINDOW" \
-            $FORCE_FLAG \
-            $DRY_FLAG
+            --limit "${{ steps.params.outputs.limit }}" \
+            --lookback-days "${{ steps.params.outputs.lookback }}" \
+            --llm-cutoff "${{ steps.params.outputs.cutoff }}" \
+            --window "${{ steps.params.outputs.window }}" \
+            $FORCE_FLAG
 
       - name: Deploy database to data branch
-        if: ${{ always() && inputs.dry_run != true }}
+        if: ${{ always() && steps.candidates.outputs.has_candidates == 'true' && inputs.dry_run != true }}
         env:
           STUID: ${{ secrets.STUID }}
           UISPSW: ${{ secrets.UISPSW }}
