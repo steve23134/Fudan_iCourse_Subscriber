@@ -529,11 +529,7 @@ class Database:
                    WHERE sub_id = ?
                      AND (img_sha IS NULL OR img_sha = '')
                      AND media_evicted_at IS NULL
-                     AND ocr_status != 'pending'
-                     AND NOT (
-                       ocr_status = 'done'
-                       AND text IS NOT NULL AND TRIM(text) != ''
-                     )""",
+                     AND ocr_status = 'failed'""",
                 (sub_id,),
             )
             return repaired + (cur.rowcount or 0)

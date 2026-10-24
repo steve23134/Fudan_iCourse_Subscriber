@@ -245,11 +245,7 @@ class LectureRunner:
         self._scheduler.prefetch_lecture(
             self._client, next_course, next_sub,
             audio=False if image_only else self._needs_audio(next_sub),
-            skip_images=(
-                self._db.get_ppt_media_page_nums(next_sub)
-                if image_only
-                else self._db.get_resolved_ppt_page_nums(next_sub)
-            ),
+            skip_images=self._db.get_resolved_ppt_page_nums(next_sub),
         )
 
     def _needs_audio(self, sub_id: str) -> bool:

@@ -358,11 +358,7 @@ class PPTPipeline:
         # Stage 1 — register pending rows from the current PPT list.
         # ``schedule`` is idempotent; usually the previous lecture's
         # prefetch already warmed the cache.
-        resolved_pages = (
-            self._db.get_ppt_media_page_nums(sub_id)
-            if image_only
-            else self._db.get_resolved_ppt_page_nums(sub_id)
-        )
+        resolved_pages = self._db.get_resolved_ppt_page_nums(sub_id)
         self._scheduler.image_cache.schedule(
             client, course_id, sub_id, skip_pages=resolved_pages,
         )
