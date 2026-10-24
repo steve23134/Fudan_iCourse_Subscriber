@@ -520,7 +520,7 @@ class Database:
                        media_updated_at = ?
                    WHERE sub_id = ?
                      AND img_sha IS NOT NULL AND img_sha != ''
-                     AND ocr_status != 'done'""",
+                     AND ocr_status NOT IN ('done', 'image_only')""",
                 (now, now, sub_id),
             ).rowcount or 0
             cur = self.conn.execute(
