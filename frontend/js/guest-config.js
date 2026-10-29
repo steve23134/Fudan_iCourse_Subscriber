@@ -1,5 +1,5 @@
 window.ICS_GUEST_CONFIG = Object.freeze({
-  routeHash: "bcdb3e48e201230aec0aa3b531791615c4751f6ab9848d9695c6ebc123dd210e",
+  routeHash: "178b4a3eedea5e1fd285d9bdfd3ba3b211b39da6dc735eb0dd4465353c7355d4",
   envelopeUrl: "access/guest-access.enc",
   kdfIterations: 600000,
 });
