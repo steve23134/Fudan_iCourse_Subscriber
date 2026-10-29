@@ -74,8 +74,18 @@ async function _idbPut(key, value) {
 
 /* ── Credential helpers (localStorage) ── */
 const _LS = "ics_";
-const _loadCreds = () => { try { return JSON.parse(localStorage.getItem(_LS + "creds")); } catch { return null; } };
-const _saveCreds = (c) => localStorage.setItem(_LS + "creds", JSON.stringify(c));
+let _runtimeCreds = null;
+const _loadCreds = () => {
+  if (_runtimeCreds) return _runtimeCreds;
+  try { return JSON.parse(localStorage.getItem(_LS + "creds")); }
+  catch { return null; }
+};
+const _saveCreds = (c) => {
+  _runtimeCreds = null;
+  localStorage.setItem(_LS + "creds", JSON.stringify(c));
+};
+const _setRuntimeCreds = (c) => { _runtimeCreds = c; };
+const _clearRuntimeCreds = () => { _runtimeCreds = null; };
 const _loadSettings = () => { try { return JSON.parse(localStorage.getItem(_LS + "settings")) || {}; } catch { return {}; } };
 const _saveSettings = (s) => localStorage.setItem(_LS + "settings", JSON.stringify(s));
 /* Starred-course IDs are per-browser (localStorage). The school side
@@ -265,6 +275,9 @@ document.addEventListener("alpine:init", () => {
     commitSha: null,
     setup: { token: "", stuid: "", uispsw: "" },
     setupError: "", setupTesting: false,
+    guestRouteActive: false, guestAuthenticated: false,
+    guestForm: { username: "", password: "" },
+    guestError: "", guestTesting: false,
     settingsForm: {}, showSecrets: {},
     exportDialogOpen: false, exportSelection: {}, exportingPdf: false,
     deleteDialogOpen: false, deleteSelection: {}, deletingCourses: false,
@@ -293,11 +306,15 @@ document.addEventListener("alpine:init", () => {
     starred: _loadStarred(),
 
     async init() {
+      this.guestRouteActive = await ICS.guest.preparePage(location.hash);
+      if (this.guestRouteActive) { this.view = "guest-login"; }
+
       const detected = ICS.github.detectRepo();
       const s = _loadSettings();
       this.repoOwner = s.owner || (detected?.owner ?? "");
       this.repoName = s.repo || (detected?.repo ?? "");
       this.dataBranch = s.branch || "data";
+      if (this.guestRouteActive) return;
       const creds = _loadCreds();
       if (!creds) { this.view = "setup"; return; }
       await this._loadDB(creds);
@@ -317,7 +334,8 @@ document.addEventListener("alpine:init", () => {
 
         if (manifest.format === "sharded") {
           this.loadingMsg = "Deriving decryption key...";
-          var pw = await ICS.crypto.buildPasswordV2(creds);
+          var pw = creds.dbPassword
+            || await ICS.crypto.buildPasswordV2(creds);
 
           this.loadingMsg = "Loading index...";
           var self = this;
@@ -355,6 +373,11 @@ document.addEventListener("alpine:init", () => {
     _go(view, params) {
       params = params || {};
       this.error = null;
+      if (this.guestRouteActive && !this.guestAuthenticated
+          && view !== "guest-login") {
+        this.view = "guest-login";
+        return;
+      }
       if (view === "courses") {
         this.courses = this._sortCoursesByStar(ICS.db.getCourses());
       }
@@ -583,7 +606,8 @@ document.addEventListener("alpine:init", () => {
             var encrypted = await ICS.github.fetchBlobBytes(
               this.repoOwner, this.repoName, page.img_sha, creds.token,
             );
-            var password = await ICS.crypto.buildPasswordV2(creds);
+            var password = creds.dbPassword
+              || await ICS.crypto.buildPasswordV2(creds);
             bytes = await ICS.crypto.decrypt(
               encrypted, password, ICS.crypto.NEW_ITERATIONS,
             );
@@ -970,7 +994,11 @@ document.addEventListener("alpine:init", () => {
       this.loadMediaStats();
     },
     async saveSettingsAndReload() {
-      _saveCreds({ ...this.settingsForm });
+      if (this.guestAuthenticated) {
+        _setRuntimeCreds({ ...this.settingsForm });
+      } else {
+        _saveCreds({ ...this.settingsForm });
+      }
       _saveSettings({ owner: this.repoOwner, repo: this.repoName, branch: this.dataBranch });
       this._toast("Saved. Reloading...", "success");
       const c = _loadCreds();
@@ -1082,6 +1110,7 @@ document.addEventListener("alpine:init", () => {
       if (!confirm("Clear all saved credentials?")) return;
       this._revokePptUrls();
       this.lightboxUrl = null;
+      _clearRuntimeCreds();
       localStorage.removeItem(_LS + "creds");
       localStorage.removeItem(_LS + "settings");
       // Close the cached connection before deleting — Chrome/Firefox block
@@ -1091,8 +1120,38 @@ document.addEventListener("alpine:init", () => {
         _idbPromise = null;
       }
       indexedDB.deleteDatabase(_idbName);
-      this.view = "setup";
+      if (this.guestRouteActive) {
+        this.guestAuthenticated = false;
+        this.guestForm = { username: "", password: "" };
+        this.view = "guest-login";
+      } else {
+        this.view = "setup";
+      }
       this.setup = { token: "", stuid: "", uispsw: "" };
+    },
+
+    async guestLogin() {
+      if (this.guestTesting) return;
+      this.guestTesting = true;
+      this.guestError = "";
+      try {
+        var guest = await ICS.guest.unlock(
+          this.guestForm.username, this.guestForm.password,
+        );
+        _setRuntimeCreds(guest);
+        this.repoOwner = guest.repoOwner || this.repoOwner;
+        this.repoName = guest.repoName || this.repoName;
+        this.dataBranch = guest.dataBranch || "data";
+        this.guestAuthenticated = true;
+        this.guestForm.password = "";
+        await this._loadDB(guest);
+      } catch (e) {
+        this.guestAuthenticated = false;
+        _clearRuntimeCreds();
+        this.guestError = e?.message || "账号或密码错误";
+      } finally {
+        this.guestTesting = false;
+      }
     },
 
     // ── Subscriptions editor (three-column) ──────────────────────────

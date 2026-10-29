@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="referrer" content="no-referrer">
   <title>iCourse Subscriber</title>
 
   <!-- Tailwind CSS -->
@@ -21,7 +22,7 @@
      ║  Mobile: header only (nav stays at bottom)          ║
      ║  Desktop: single bar = header + tabs merged         ║
      ╚══════════════════════════════════════════════════════╝ -->
-<header x-show="view !== 'setup'"
+<header x-show="!['setup', 'guest-login'].includes(view)"
         class="sticky top-0 z-30 bg-white border-b border-gray-200 px-4 flex items-center justify-between h-14">
 
   <!-- Left: back arrow or logo -->
@@ -178,6 +179,34 @@
       </button>
       <button @click="view = 'setup'" class="text-sm text-gray-500 underline">
         Re-enter credentials
+      </button>
+    </div>
+  </div>
+
+  <!-- ─── GUEST LOGIN ─── -->
+  <div x-show="view === 'guest-login'" class="max-w-md mx-auto p-6 mt-16">
+    <h2 class="text-xl font-bold text-gray-800 mb-1">访客访问</h2>
+    <p class="text-sm text-gray-500 mb-6">请输入分配给你的访客账号和密码。</p>
+    <div class="space-y-4">
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">账号</label>
+        <input x-model="guestForm.username" type="text"
+               autocomplete="username"
+               class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-300 focus:outline-none">
+      </div>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">密码</label>
+        <input x-model="guestForm.password" type="password"
+               autocomplete="current-password"
+               @keydown.enter="guestLogin()"
+               class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-300 focus:outline-none">
+      </div>
+      <p x-show="guestError" x-text="guestError"
+         class="text-sm text-red-600 bg-red-50 rounded-lg p-3"></p>
+      <button @click="guestLogin()" :disabled="guestTesting"
+              class="w-full bg-blue-500 text-white py-2.5 rounded-lg font-medium hover:bg-blue-600 disabled:opacity-50 flex items-center justify-center gap-2">
+        <div x-show="guestTesting" class="spinner !w-4 !h-4 !border-2 !border-white/30 !border-t-white"></div>
+        <span x-text="guestTesting ? '验证中…' : '登录'"></span>
       </button>
     </div>
   </div>
@@ -1082,6 +1111,8 @@
 <script defer src="js/schema.js?v=dev"></script>
 <script defer src="js/db.js?v=dev"></script>
 <script defer src="js/render.js?v=dev"></script>
+<script defer src="js/guest-config.js?v=dev"></script>
+<script defer src="js/guest.js?v=dev"></script>
 <script defer src="js/app.js?v=dev"></script>
 <!-- Alpine.js LAST — auto-starts after all defer scripts -->
 <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js"></script>

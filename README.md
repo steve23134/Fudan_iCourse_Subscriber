@@ -107,6 +107,43 @@
 前端当前版本记录在 `frontend/VERSION`，使用语义化版本 `x.y.z`。部署时
 GitHub Actions 会校验格式并自动写入前端脚本的缓存参数。
 
+### 全权限访客访问
+
+访客入口使用哈希隐藏路由，并通过独立账号密码解密一份加密凭据包。凭据包
+不会出现在普通页面中，错误账号密码无法解密。
+
+需要配置以下 Repository Secrets：
+
+| Secret | 说明 |
+|---|---|
+| `GUEST_USERNAME` | 分配给访客的账号 |
+| `GUEST_PASSWORD` | 至少 20 位的高强度随机密码 |
+| `GUEST_ROUTE_SLUG` | 至少 32 位随机入口字符串，不要提交或公开 |
+| `GUEST_PAT` | 专用于访客、仅授权当前仓库的 Fine-grained PAT |
+
+`GUEST_PAT` 需要以下仓库权限：
+
+- `Contents: Read and write`
+- `Actions: Read and write`
+- `Secrets: Read and write`
+
+配置完成后，运行 Actions → **Configure Guest Access**。workflow 会生成：
+
+- `frontend/access/guest-access.enc`
+- `frontend/js/guest-config.js`
+
+随后访客使用以下格式访问：
+
+```text
+https://steve23134.github.io/Fudan_iCourse_Subscriber/#g=<GUEST_ROUTE_SLUG>
+```
+
+访客输入 `GUEST_USERNAME` 和 `GUEST_PASSWORD` 后拥有与仓库主 PAT 相同的
+全部页面功能。访客凭据只保存在当前页面内存中，刷新后需要重新登录。
+
+撤销或轮换访客权限时，应删除旧 `GUEST_PAT`、设置新的 `GUEST_PAT` 和
+`GUEST_PASSWORD`，再重新运行 **Configure Guest Access**。
+
 如果 Actions 返回 `422 Actions has been disabled for this repository`，
 说明 GitHub 因 fork 的 Actions 使用量自动暂停了工作流；即使权限 API 显示
 `enabled: true`，也需要仓库维护者在 Actions 页面点击横幅中的重新启用按钮。
