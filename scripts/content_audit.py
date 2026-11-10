@@ -13,11 +13,13 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone
 
-import requests
-
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from main import _check_session, login_with_retry  # noqa: E402
+from main import (  # noqa: E402
+    _check_session,
+    is_transient_login_error,
+    login_with_retry,
+)
 from src.ai.summarizer import Summarizer  # noqa: E402
 from src.ai.transcriber import Transcriber  # noqa: E402
 from src.api.icourse import ICourseClient  # noqa: E402
@@ -58,21 +60,6 @@ def _llm_blocked(cutoff: str) -> bool:
     if not _discounted_window_open():
         return True
     return bool(cutoff and _local_now().strftime("%H:%M") >= cutoff)
-
-
-def _is_transient_login_error(exc: Exception) -> bool:
-    if isinstance(exc, (requests.RequestException, TimeoutError)):
-        return True
-    message = str(exc).lower()
-    return any(marker in message for marker in (
-        "webvpn session cold",
-        "read timed out",
-        "no login token",
-        "no logintoken",
-        "connection reset",
-        "max retries exceeded",
-        "temporarily unavailable",
-    ))
 
 
 def _parse_timestamp(raw: str | None) -> datetime | None:
@@ -241,7 +228,7 @@ def main() -> None:
         try:
             vpn = login_with_retry()
         except Exception as exc:
-            if _is_transient_login_error(exc):
+            if is_transient_login_error(exc):
                 reporter.info(
                     f"[Audit] iCourse login unavailable; deferring this "
                     f"window: {type(exc).__name__}: {exc}"

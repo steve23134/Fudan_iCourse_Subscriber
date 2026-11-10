@@ -17,6 +17,8 @@ import time
 import traceback
 from datetime import date
 
+import requests
+
 from src.runtime import config
 from src.data.database import Database
 from src.api.emailer import Emailer
@@ -27,6 +29,21 @@ from src.runtime.scheduler import Scheduler
 from src.ai.summarizer import Summarizer
 from src.ai.transcriber import Transcriber
 from src.api.webvpn import WebVPNSession
+
+
+def is_transient_login_error(exc: Exception) -> bool:
+    if isinstance(exc, (requests.RequestException, TimeoutError)):
+        return True
+    message = str(exc).lower()
+    return any(marker in message for marker in (
+        "webvpn session cold",
+        "read timed out",
+        "no login token",
+        "no logintoken",
+        "connection reset",
+        "max retries exceeded",
+        "temporarily unavailable",
+    ))
 
 
 def login_with_retry(max_attempts: int = 10) -> WebVPNSession:
@@ -360,7 +377,21 @@ def run():
         config.SMTP_EMAIL and config.SMTP_PASSWORD
     ) else None
 
-    vpn = login_with_retry()
+    try:
+        vpn = login_with_retry()
+    except Exception as exc:
+        if is_transient_login_error(exc):
+            reporter.info(
+                f"[Login] iCourse unavailable; deferring this run: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            print(
+                "[Login] upstream login timed out; deferred without "
+                "marking the run as failed."
+            )
+            reporter.run_footer()
+            return
+        raise
     client = ICourseClient(vpn)
     email_items: list = []
 
