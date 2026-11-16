@@ -35,8 +35,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
-          pip install pycryptodome
+          python -m pip install -r requirements.txt
+          python -m pip install pycryptodome
 
       - name: Fetch and decrypt database
         env:

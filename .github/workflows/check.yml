@@ -34,11 +34,27 @@ jobs:
           path: ${{ env.pythonLocation }}/lib/python*/site-packages
           key: pip-${{ hashFiles('requirements.txt') }}
 
+      - name: Repair pip toolchain
+        id: pip-tools
+        run: |
+          mkdir -p "$RUNNER_TEMP/fics-alert"
+          set -o pipefail
+          {
+            python -m ensurepip --upgrade
+            python -m pip install --upgrade --force-reinstall pip setuptools wheel
+            python -m pip --version
+          } 2>&1 | tee "$RUNNER_TEMP/fics-alert/failure.log"
+
       - name: Install Python dependencies
+        id: python-deps
         if: steps.cache-pip.outputs.cache-hit != 'true'
-        run: pip install -r requirements.txt
+        run: |
+          set -o pipefail
+          python -m pip install -r requirements.txt \
+            2>&1 | tee -a "$RUNNER_TEMP/fics-alert/failure.log"
 
       - name: Install ffmpeg
+        id: ffmpeg
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
@@ -67,17 +83,31 @@ jobs:
           key: rapidocr-onnx-default-v1
 
       - name: Install PDF dependencies
+        id: pdf-deps
         run: |
-          sudo apt-get update
-          sudo apt-get install -y fonts-noto-cjk libpango-1.0-0 libcairo2
-          pip install weasyprint pygments
-          sudo mkdir -p /usr/local/share/fonts/custom
-          sudo cp assets/MSYH.TTC /usr/local/share/fonts/custom/
-          sudo cp assets/MSYHBD.TTC /usr/local/share/fonts/custom/
-          sudo cp assets/MSYHL.TTC /usr/local/share/fonts/custom/
-          sudo fc-cache -fv
+          set -o pipefail
+          {
+            sudo apt-get update
+            sudo apt-get install -y fonts-noto-cjk libpango-1.0-0 libcairo2
+            python -m pip install weasyprint pygments
+            sudo mkdir -p /usr/local/share/fonts/custom
+            sudo cp assets/MSYH.TTC /usr/local/share/fonts/custom/
+            sudo cp assets/MSYHBD.TTC /usr/local/share/fonts/custom/
+            sudo cp assets/MSYHL.TTC /usr/local/share/fonts/custom/
+            sudo fc-cache -fv
+          } 2>&1 | tee -a "$RUNNER_TEMP/fics-alert/failure.log"
+
+      - name: Verify Python dependencies
+        id: dependency-check
+        run: |
+          set -o pipefail
+          {
+            python -m pip check
+            python -c "import requests, Crypto, PIL, markdown, psutil, pygments, numpy, imagehash, rapidocr_onnxruntime, sherpa_onnx, weasyprint, openai; print('dependency imports: OK')"
+          } 2>&1 | tee -a "$RUNNER_TEMP/fics-alert/failure.log"
 
       - name: Fetch database from data branch
+        id: fetch-database
         run: |
           mkdir -p data
           # Force-fetch (+refspec) so non-fast-forward updates from
@@ -114,6 +144,7 @@ jobs:
           fi
 
       - name: Decode database
+        id: decode-database
         if: hashFiles('data/sharded/icourse-index.enc', 'data/icourse.db.gz.enc', 'data/icourse.db.enc') != ''
         env:
           STUID: ${{ secrets.STUID }}
@@ -177,6 +208,7 @@ jobs:
           fi
 
       - name: Run
+        id: run
         timeout-minutes: 350
         env:
           StuId: ${{ secrets.STUID }}
@@ -198,9 +230,12 @@ jobs:
         run: |
           eval "$(python scripts/provider_env.py)"
           unset SECRETS_CONTEXT
-          python -u main.py
+          set -o pipefail
+          python -u main.py \
+            2>&1 | tee -a "$RUNNER_TEMP/fics-alert/failure.log"
 
       - name: Deploy database to data branch
+        id: deploy
         if: always()
         env:
           STUID: ${{ secrets.STUID }}
@@ -279,3 +314,27 @@ jobs:
           git commit -q -m "chore: update encrypted database (sharded v2)"
           git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git"
           git push --force origin data
+
+      - name: Email failure alert
+        if: failure()
+        env:
+          SMTP_EMAIL: ${{ secrets.SMTP_EMAIL }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_SECURITY: ${{ secrets.SMTP_SECURITY }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          STUID: ${{ secrets.STUID }}
+          UISPSW: ${{ secrets.UISPSW }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          WORKFLOW_NAME: iCourse Check
+          JOB_NAME: ${{ github.job }}
+          EVENT_NAME: ${{ github.event_name }}
+          COMMIT_SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          FAILURE_LOG: ${{ runner.temp }}/fics-alert/failure.log
+          FAILED_STAGE: ${{ steps.pip-tools.outcome == 'failure' && 'Repair pip toolchain' || steps.python-deps.outcome == 'failure' && 'Install Python dependencies' || steps.pdf-deps.outcome == 'failure' && 'Install PDF dependencies' || steps.dependency-check.outcome == 'failure' && 'Verify Python dependencies' || steps.ffmpeg.outcome == 'failure' && 'Install ffmpeg' || steps.fetch-database.outcome == 'failure' && 'Fetch database' || steps.decode-database.outcome == 'failure' && 'Decode database' || steps.run.outcome == 'failure' && 'Run main.py' || steps.deploy.outcome == 'failure' && 'Deploy database' || 'Other step' }}
+        run: python scripts/send_failure_email.py
