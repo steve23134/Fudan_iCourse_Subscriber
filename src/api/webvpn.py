@@ -8,6 +8,7 @@ Handles:
 
 import html as html_mod
 import re
+import time
 from binascii import hexlify, unhexlify
 from urllib.parse import urlparse, urlencode, quote, urljoin
 
@@ -166,6 +167,7 @@ class WebVPNSession:
         self.session.headers.update({"User-Agent": config.USER_AGENT})
         self.logged_in = False
         self.last_auth_diagnostic: dict = {}
+        self.last_webvpn_warmup: list[dict] = []
 
     def login(self, student_id: str = None, password: str = None) -> bool:
         """Execute the full 7-step IDP authentication flow.
@@ -230,14 +232,41 @@ class WebVPNSession:
 
         print("[*] Starting iCourse CAS authentication through WebVPN...")
 
-        # Pre-flight: probe the WebVPN portal.  A cold session redirects to
-        # /login instantly (status 302); a hot session returns 200.  Fail
-        # fast on cold — login_with_retry() in main.py will re-login.
-        warmup = self.session.get(
-            config.WEBVPN_BASE + "/", allow_redirects=False, timeout=5,
-        )
-        if warmup.status_code != 200:
-            raise RuntimeError("WebVPN session cold — re-login needed")
+        # A cold WebVPN session redirects to /login, but the edge occasionally
+        # returns a transient redirect or slow response for an otherwise hot
+        # session. Give the same session two more chances before a full
+        # re-login discards potentially valid cookies.
+        self.last_webvpn_warmup = []
+        for attempt in range(3):
+            try:
+                warmup = self.session.get(
+                    config.WEBVPN_BASE + "/",
+                    allow_redirects=False,
+                    timeout=(10, 60),
+                )
+                self.last_webvpn_warmup.append({
+                    "attempt": attempt + 1,
+                    "http_status": warmup.status_code,
+                })
+            except requests.exceptions.Timeout as exc:
+                self.last_webvpn_warmup.append({
+                    "attempt": attempt + 1,
+                    "timeout": True,
+                })
+                if attempt < 2:
+                    time.sleep(2)
+                    continue
+                raise
+            if warmup.status_code == 200:
+                break
+            if attempt < 2:
+                time.sleep(2)
+        else:
+            status = self.last_webvpn_warmup[-1].get("http_status", "unknown")
+            raise RuntimeError(
+                f"WebVPN session cold — re-login needed "
+                f"(status={status})"
+            )
 
         idp_vpn_base = get_vpn_url(config.IDP_BASE)
 
@@ -655,11 +684,18 @@ class WebVPNSession:
         for attempt in range(3):
             try:
                 resp = self.session.get(
-                    ticket_url, allow_redirects=True, timeout=20
+                    ticket_url, allow_redirects=True, timeout=(10, 60)
                 )
                 if resp.status_code == 200:
                     print("    Session established.")
                     return
+                if resp.status_code in (429, 500, 502, 503, 504) and attempt < 2:
+                    print(
+                        f"    Transient status {resp.status_code}, "
+                        f"retrying ({attempt + 2}/3)..."
+                    )
+                    time.sleep(2)
+                    continue
                 raise RuntimeError(
                     f"Failed to establish WebVPN session (status={resp.status_code})"
                 )
@@ -673,5 +709,6 @@ class WebVPNSession:
                     return
                 if attempt < 2:
                     print(f"    Timeout, retrying ({attempt + 2}/3)...")
+                    time.sleep(2)
                     continue
                 raise

@@ -19,33 +19,20 @@ import traceback
 from datetime import date
 from pathlib import Path
 
-import requests
-
 from src.runtime import config
 from src.data.database import Database
 from src.api.emailer import Emailer
 from src.api.icourse import ICourseClient
+from src.api.login_retry import (
+    LOGIN_RETRY_DELAYS,
+    is_transient_login_error,
+    login_with_retry,
+)
 from src.pipeline.lecture_runner import LectureRunner
 from src.runtime.reporter import Reporter
 from src.runtime.scheduler import Scheduler
 from src.ai.summarizer import Summarizer
 from src.ai.transcriber import Transcriber
-from src.api.webvpn import WebVPNSession
-
-
-def is_transient_login_error(exc: Exception) -> bool:
-    if isinstance(exc, (requests.RequestException, TimeoutError)):
-        return True
-    message = str(exc).lower()
-    return any(marker in message for marker in (
-        "webvpn session cold",
-        "read timed out",
-        "no login token",
-        "no logintoken",
-        "connection reset",
-        "max retries exceeded",
-        "temporarily unavailable",
-    ))
 
 
 def mark_workflow_deferred(reason: str) -> None:
@@ -55,32 +42,6 @@ def mark_workflow_deferred(reason: str) -> None:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(reason + "\n", encoding="utf-8")
-
-
-def login_with_retry(max_attempts: int = 10) -> WebVPNSession:
-    """Login to WebVPN + iCourse CAS, retrying on transient failures.
-
-    The iCourse CAS step (authenticate_icourse) has its own inner retry
-    loop for transient redirect-chain hiccups; this outer loop only runs
-    when those inner retries are exhausted, which generally means the
-    WebVPN session itself needs a fresh login.  5 attempts handles the
-    long tail of times when CAS rejects multiple fresh sessions in a
-    row before letting one through.
-    """
-    for attempt in range(max_attempts):
-        try:
-            vpn = WebVPNSession()
-            print(f"\n[Login] WebVPN (attempt {attempt + 1}/{max_attempts})...")
-            vpn.login()
-            print("[Login] iCourse CAS...")
-            vpn.authenticate_icourse()
-            return vpn
-        except Exception as e:
-            if attempt < max_attempts - 1:
-                print(f"  Failed: {type(e).__name__}: {e}; retrying...")
-                time.sleep(5)
-            else:
-                raise
 
 
 def _check_session(client: ICourseClient) -> None:

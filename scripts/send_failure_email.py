@@ -45,6 +45,8 @@ def classify_failure(stage: str, log_tail: str) -> str:
         return "Python pip 工具链损坏"
     if "no module named" in text or "modulenotfounderror" in text:
         return "Python 依赖安装不完整"
+    if "secondary authentication" in text:
+        return "iCourse 需要二次认证"
     if any(token in text for token in (
         "webvpn", "logintoken", "cas response", "icourse login",
     )):
