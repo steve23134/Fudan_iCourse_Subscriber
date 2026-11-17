@@ -40,6 +40,10 @@ def auth_response_diagnostic(data: object, http_status: int | None = None) -> di
             "response_type": type(data).__name__,
         }
     second = data.get("second")
+    module_codes = _second_module_codes(second)
+    if not module_codes:
+        module_codes = _second_module_codes(data)
+    data_value = data.get("data")
     return {
         "http_status": http_status,
         "code": data.get("code"),
@@ -48,7 +52,13 @@ def auth_response_diagnostic(data: object, http_status: int | None = None) -> di
         "top_level_keys": sorted(str(key) for key in data),
         "has_login_token": bool(data.get("loginToken")),
         "has_second": bool(second),
-        "second_module_codes": _second_module_codes(second),
+        "second_module_codes": module_codes,
+        "page_level_no": data.get("pageLevelNo"),
+        "data_type": type(data_value).__name__,
+        "data_keys": (
+            sorted(str(key) for key in data_value)
+            if isinstance(data_value, dict) else []
+        ),
     }
 
 
@@ -360,7 +370,7 @@ class WebVPNSession:
 
         second = data.get("second")
         if second:
-            modules = _second_module_codes(second)
+            modules = self.last_auth_diagnostic["second_module_codes"]
             detail = ",".join(modules) if modules else "unknown"
             raise SecondaryAuthRequired(
                 f"iCourse CAS requires secondary authentication "
