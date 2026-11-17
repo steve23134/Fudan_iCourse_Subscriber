@@ -16,6 +16,7 @@ import requests
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.api.session_cookie import SessionCookieError  # noqa: E402
+from src.api.login_retry import login_with_retry  # noqa: E402
 from src.api.webvpn import WebVPNSession  # noqa: E402
 from src.runtime import config  # noqa: E402
 
@@ -137,30 +138,18 @@ def main() -> int:
 
     report["public_reachability"] = _public_reachability()
     try:
-        vpn.login()
+        authenticated = login_with_retry()
         report["webvpn_login"] = {"ok": True}
+        report["icourse_cas"] = {
+            "ok": True,
+            "diagnostic": authenticated.last_auth_diagnostic,
+        }
+        status = 0
     except Exception as exc:
         report["webvpn_login"] = {
             "ok": False,
             "exception": type(exc).__name__,
             "error": sanitize(exc),
-        }
-        print("[Login Probe] " + json.dumps(report, ensure_ascii=False))
-        return 1
-
-    try:
-        vpn.authenticate_icourse()
-        report["icourse_cas"] = {
-            "ok": True,
-            "diagnostic": vpn.last_auth_diagnostic,
-        }
-        status = 0
-    except Exception as exc:
-        report["icourse_cas"] = {
-            "ok": False,
-            "exception": type(exc).__name__,
-            "error": sanitize(exc),
-            "diagnostic": vpn.last_auth_diagnostic,
         }
         status = 1
 
