@@ -28,6 +28,19 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install requests pycryptodome
 
+      - name: Test direct iCourse route
+        env:
+          FALLBACK_IP: ${{ vars.ICOURSE_FALLBACK_IP }}
+        run: |
+          IP="${FALLBACK_IP:-175.186.248.2}"
+          curl -4 -sS \
+            --connect-timeout 10 \
+            --max-time 30 \
+            --resolve "icourse.fudan.edu.cn:443:${IP}" \
+            -o /dev/null \
+            -w "direct_icourse http=%{http_code} total=%{time_total}s remote=%{remote_ip}\n" \
+            "https://icourse.fudan.edu.cn/"
+
       - name: Run safe login probe
         env:
           StuId: ${{ secrets.STUID }}
