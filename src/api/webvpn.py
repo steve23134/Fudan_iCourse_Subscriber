@@ -7,10 +7,11 @@ Handles:
 """
 
 import html as html_mod
+import hmac
 import os
 import re
 import time
-from binascii import hexlify, unhexlify
+from binascii import Error as Base32Error, hexlify, unhexlify
 from urllib.parse import urlparse, urlencode, quote, urljoin
 
 import requests
@@ -67,6 +68,32 @@ def auth_response_diagnostic(data: object, http_status: int | None = None) -> di
 
 class SecondaryAuthRequired(RuntimeError):
     """IDP accepted the password but requires another authentication step."""
+
+
+class TotpAuthError(SecondaryAuthRequired):
+    """The configured UIS TOTP secret could not complete authentication."""
+
+
+def totp_code(secret: str, timestamp: float | None = None) -> str:
+    """Generate a six-digit RFC 6238 TOTP using the UIS defaults."""
+    normalized = "".join(secret.split()).upper().rstrip("=")
+    if not normalized:
+        raise TotpAuthError(
+            "Set UIS_TOTP_SECRET to the Base32 key from UIS account security"
+        )
+    try:
+        key = base64.b32decode(normalized + "=" * (-len(normalized) % 8))
+    except (Base32Error, ValueError):
+        raise TotpAuthError(
+            "UIS_TOTP_SECRET must be a valid Base32 TOTP key"
+        ) from None
+    counter = int(
+        (time.time() if timestamp is None else timestamp) // 30
+    )
+    digest = hmac.digest(key, counter.to_bytes(8, "big"), "sha1")
+    offset = digest[-1] & 0x0F
+    number = int.from_bytes(digest[offset:offset + 4], "big")
+    return f"{(number & 0x7FFFFFFF) % 1_000_000:06d}"
 
 
 def encrypt_host(hostname: str) -> str:
@@ -427,9 +454,18 @@ class WebVPNSession:
         if second:
             modules = self.last_auth_diagnostic["second_module_codes"]
             detail = ",".join(modules) if modules else "unknown"
-            raise SecondaryAuthRequired(
-                f"iCourse CAS requires secondary authentication "
-                f"(modules={detail})"
+            if "userAndOtp" not in modules:
+                raise SecondaryAuthRequired(
+                    f"iCourse CAS requires unsupported secondary "
+                    f"authentication (modules={detail})"
+                )
+            data = self._authenticate_totp(
+                data,
+                student_id,
+                lck,
+                entity_id,
+                request_type,
+                via_vpn=True,
             )
 
         login_token = data.get("loginToken", "")
@@ -660,6 +696,15 @@ class WebVPNSession:
                 f"Authentication failed (code={data.get('code')})"
             )
 
+        if data.get("second"):
+            data = self._authenticate_totp(
+                data,
+                student_id,
+                lck,
+                entity_id,
+                request_type,
+            )
+
         # loginToken is at top level, not nested under "data"
         login_token = data.get("loginToken", "")
         if not login_token:
@@ -667,6 +712,79 @@ class WebVPNSession:
 
         print("    loginToken: OK")
         return login_token
+
+    def _authenticate_totp(
+        self,
+        challenge: dict,
+        student_id: str,
+        lck: str,
+        entity_id: str,
+        request_type: str,
+        *,
+        via_vpn: bool = False,
+    ) -> dict:
+        """Complete a userAndOtp challenge with the configured TOTP key."""
+        module_codes = _second_module_codes(challenge)
+        if "userAndOtp" not in module_codes:
+            raise SecondaryAuthRequired(
+                "Unified authentication requires a second factor, "
+                "but TOTP is not offered"
+            )
+        if not challenge.get("requestNumber") or not challenge.get("authChainCode"):
+            raise TotpAuthError(
+                "TOTP challenge is missing authentication context"
+            )
+
+        code = totp_code(config.TOTP_SECRET)
+        base = get_vpn_url(config.IDP_BASE) if via_vpn else config.IDP_BASE
+        origin = config.WEBVPN_BASE if via_vpn else config.IDP_BASE
+        print("[Login] TOTP second factor...")
+        try:
+            resp = self.session.post(
+                f"{base}/idp/authn/authExecute",
+                json={
+                    "authModuleCode": "userAndOtp",
+                    "authChainCode": challenge["authChainCode"],
+                    "entityId": entity_id,
+                    "requestNumber": challenge["requestNumber"],
+                    "requestType": request_type,
+                    "lck": lck,
+                    "authPara": {
+                        "loginName": (
+                            challenge.get("userName") or student_id
+                        ),
+                        "otpCode": code,
+                    },
+                },
+                headers={
+                    "Content-Type": "application/json",
+                    "Referer": f"{base}/ac/",
+                    "Origin": origin,
+                },
+                timeout=60,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except (requests.RequestException, ValueError):
+            raise TotpAuthError(
+                "TOTP request failed; automatic login retries stopped"
+            ) from None
+
+        self.last_auth_diagnostic = auth_response_diagnostic(
+            data, http_status=resp.status_code,
+        )
+        if not isinstance(data, dict) or str(data.get("code")) != "200":
+            raise TotpAuthError(
+                "TOTP authentication failed; check UIS_TOTP_SECRET "
+                "and the runner clock"
+            )
+        if data.get("second") or not data.get("loginToken"):
+            raise TotpAuthError(
+                "TOTP did not finish authentication; another verification "
+                "step is still required"
+            )
+        print("[Login] TOTP OK")
+        return data
 
     def _get_cas_ticket(self, login_token: str) -> str:
         """Step 6: Exchange loginToken for a CAS ticket URL."""

@@ -47,6 +47,8 @@ def classify_failure(stage: str, log_tail: str) -> str:
         return "Python 依赖安装不完整"
     if "icourse_session_cookie" in text or "session cookie" in text:
         return "iCourse 会话 Cookie 无效或已过期"
+    if "totp" in text or "userandotp" in text:
+        return "UIS TOTP 动态口令验证失败"
     if "secondary authentication" in text:
         return "iCourse 需要二次认证"
     if any(token in text for token in (
@@ -78,7 +80,7 @@ def sanitize(text: str) -> str:
     for name in (
         "SMTP_PASSWORD", "STUID", "UISPSW", "DEEPSEEK_API_KEY",
         "DASHSCOPE_API_KEY", "GEMINI_API_KEY", "GUEST_PAT",
-        "ICOURSE_SESSION_COOKIE",
+        "ICOURSE_SESSION_COOKIE", "UIS_TOTP_SECRET",
     ):
         value = os.environ.get(name, "")
         if len(value) >= 4:

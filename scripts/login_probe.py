@@ -31,7 +31,7 @@ _SECRET_PATTERNS = (
 
 def sanitize(value: object) -> str:
     text = str(value)
-    for name in ("StuId", "UISPsw"):
+    for name in ("StuId", "UISPsw", "UIS_TOTP_SECRET"):
         secret = os.environ.get(name, "")
         if len(secret) >= 3:
             text = text.replace(secret, "***")
@@ -93,6 +93,7 @@ def main() -> int:
     report = {
         "started_at": datetime.now(timezone.utc).isoformat(),
         "public_reachability": [],
+        "totp_configured": bool(config.TOTP_SECRET),
         "saved_session": {
             "configured": bool(config.ICOURSE_SESSION_COOKIE),
             "ok": None,

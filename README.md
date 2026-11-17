@@ -35,7 +35,7 @@
 |---|---|---|---|
 | `STUID` | ✅ | 复旦学号 | `22307110000` |
 | `UISPSW` | ✅ | UIS 统一身份认证密码 | `your_password` |
-| `ICOURSE_SESSION_COOKIE` | ⚠️ | 复旦 IDP 要求二次认证时使用；由浏览器一次性授权后生成 | `base64:...` |
+| `UIS_TOTP_SECRET` | ✅ | UIS「动态口令」绑定时显示的 Base32 密钥 | `JBSWY3DPEHPK3PXP` |
 | `COURSE_IDS` | ✅ | 要监控的课程 ID，多个用英文逗号分隔 | `35472,30251` |
 | `DASHSCOPE_API_KEY` | ⬜ | ModelScope 平台 API Key | `ms-xxxxxxxx` |
 | `DEEPSEEK_API_KEY` | ⬜ | DeepSeek API Key（推荐） | `sk-xxxxxxxx` |
@@ -46,34 +46,18 @@
 
 > 至少配置一个 LLM API Key（DASHSCOPE、DEEPSEEK 或 GEMINI）。程序按配置顺序自动回退尝试。如果需要选择其他的LLM供应商，可以在`src\runtime\config.py`路径下自定义供应商。
 
-### 二次认证会话
+### 配置 UIS 动态口令（TOTP）
 
-如果 Login Probe 返回 `SecondaryAuthRequired`，或者 id.fudan.edu.cn 要求
-`qr / 邮箱 / 短信 / OTP`，需要由你完成一次人工认证，再生成可选 Secret
-`ICOURSE_SESSION_COOKIE`。Actions 会优先验证并复用该会话；会话失效后才会
-回退到账号密码登录。
+复旦 UIS 在密码验证后可能要求二次认证。程序使用标准 TOTP
+（Base32、HMAC-SHA1、6 位、30 秒）自动完成 `userAndOtp` 验证。
 
-本地使用 Agent Browser 完成授权的示例：
+先进入 [UIS 账号安全页面](https://id.fudan.edu.cn/uc/#/pc/userCenter/accountSecurity)，
+在「动态口令」中完成绑定。绑定时页面会显示一次 Base32 密钥；将该密钥保存为
+Repository Secret `UIS_TOTP_SECRET`。不要填写当前六位动态验证码。若已经绑定
+但未保存密钥，需要解绑后重新绑定才能获得新的密钥。
 
-```powershell
-$env:AGENT_BROWSER_SESSION = "fudan-icourse-auth"
-agent-browser --headed open "https://webvpn.fudan.edu.cn/https/77726476706e69737468656265737421f9f44e8935236d1e781d8dad961b2631a501f26f"
-```
-
-在打开的浏览器中自行完成统一身份认证和二次认证。进入 iCourse 后执行：
-
-```powershell
-agent-browser state save "F:\Code\Codex\icourse-state.json"
-agent-browser close
-python scripts/export_session_cookie.py `
-  --state "F:\Code\Codex\icourse-state.json" `
-  --output "F:\Code\Codex\session_cookie_secret.txt"
-```
-
-将 `session_cookie_secret.txt` 的内容保存为 Repository Secret
-`ICOURSE_SESSION_COOKIE`，然后运行一次 **Login Probe**。导出脚本只保留
-`*.fudan.edu.cn` Cookie，不会保留 GitHub、邮箱或其他站点的 Cookie；该文件
-已在 `.gitignore` 中排除，不得提交或分享。
+该密钥等同于账号的二次认证凭据，只能保存在 GitHub Secret 中，不得提交、
+分享或发送给其他人。
 
 ### 第 3 步：获取课程 ID
 

@@ -255,7 +255,7 @@ jobs:
         env:
           StuId: ${{ secrets.STUID }}
           UISPsw: ${{ secrets.UISPSW }}
-          ICOURSE_SESSION_COOKIE: ${{ secrets.ICOURSE_SESSION_COOKIE }}
+          UIS_TOTP_SECRET: ${{ secrets.UIS_TOTP_SECRET }}
           COURSE_IDS: ${{ secrets.COURSE_IDS }}
           SMTP_EMAIL: ${{ secrets.SMTP_EMAIL }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
