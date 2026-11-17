@@ -13,9 +13,11 @@ AudioDownloader.  This file does only orchestration:
 Anything more interesting belongs in one of ``src/*`` modules.
 """
 
+import os
 import time
 import traceback
 from datetime import date
+from pathlib import Path
 
 import requests
 
@@ -44,6 +46,15 @@ def is_transient_login_error(exc: Exception) -> bool:
         "max retries exceeded",
         "temporarily unavailable",
     ))
+
+
+def mark_workflow_deferred(reason: str) -> None:
+    path = os.environ.get("FICS_DEFERRED_FILE", "").strip()
+    if not path:
+        return
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(reason + "\n", encoding="utf-8")
 
 
 def login_with_retry(max_attempts: int = 10) -> WebVPNSession:
@@ -381,6 +392,11 @@ def run():
         vpn = login_with_retry()
     except Exception as exc:
         if is_transient_login_error(exc):
+            reason = (
+                f"iCourse login temporarily unavailable: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            mark_workflow_deferred(reason)
             reporter.info(
                 f"[Login] iCourse unavailable; deferring this run: "
                 f"{type(exc).__name__}: {exc}"

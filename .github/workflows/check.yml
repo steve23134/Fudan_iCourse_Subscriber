@@ -222,6 +222,7 @@ jobs:
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_SECURITY: ${{ secrets.SMTP_SECURITY }}
           SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          FICS_DEFERRED_FILE: ${{ runner.temp }}/fics-alert/deferred.flag
           # All secrets, JSON-encoded. provider_env.py exports only the
           # vars named by config.MODEL_PROVIDERS (api_key_env /
           # base_url_env), so user-defined providers with custom env-var
@@ -233,6 +234,11 @@ jobs:
           set -o pipefail
           python -u main.py \
             2>&1 | tee -a "$RUNNER_TEMP/fics-alert/failure.log"
+          if [ -f "$FICS_DEFERRED_FILE" ]; then
+            echo "deferred=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deferred=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Deploy database to data branch
         id: deploy
@@ -331,10 +337,36 @@ jobs:
           DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           WORKFLOW_NAME: iCourse Check
+          ALERT_TYPE: failure
           JOB_NAME: ${{ github.job }}
           EVENT_NAME: ${{ github.event_name }}
           COMMIT_SHA: ${{ github.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           FAILURE_LOG: ${{ runner.temp }}/fics-alert/failure.log
           FAILED_STAGE: ${{ steps.pip-tools.outcome == 'failure' && 'Repair pip toolchain' || steps.python-deps.outcome == 'failure' && 'Install Python dependencies' || steps.pdf-deps.outcome == 'failure' && 'Install PDF dependencies' || steps.dependency-check.outcome == 'failure' && 'Verify Python dependencies' || steps.ffmpeg.outcome == 'failure' && 'Install ffmpeg' || steps.fetch-database.outcome == 'failure' && 'Fetch database' || steps.decode-database.outcome == 'failure' && 'Decode database' || steps.run.outcome == 'failure' && 'Run main.py' || steps.deploy.outcome == 'failure' && 'Deploy database' || 'Other step' }}
+        run: python scripts/send_failure_email.py
+
+      - name: Email deferred run alert
+        if: success() && steps.run.outputs.deferred == 'true'
+        env:
+          SMTP_EMAIL: ${{ secrets.SMTP_EMAIL }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_SECURITY: ${{ secrets.SMTP_SECURITY }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          STUID: ${{ secrets.STUID }}
+          UISPSW: ${{ secrets.UISPSW }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          WORKFLOW_NAME: iCourse Check
+          ALERT_TYPE: deferred
+          JOB_NAME: ${{ github.job }}
+          EVENT_NAME: ${{ github.event_name }}
+          COMMIT_SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          FAILURE_LOG: ${{ runner.temp }}/fics-alert/deferred.flag
+          FAILED_STAGE: iCourse login deferred
         run: python scripts/send_failure_email.py

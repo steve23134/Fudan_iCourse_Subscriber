@@ -45,7 +45,9 @@ def classify_failure(stage: str, log_tail: str) -> str:
         return "Python pip 工具链损坏"
     if "no module named" in text or "modulenotfounderror" in text:
         return "Python 依赖安装不完整"
-    if any(token in text for token in ("webvpn", "logintoken", "cas response")):
+    if any(token in text for token in (
+        "webvpn", "logintoken", "cas response", "icourse login",
+    )):
         return "iCourse / WebVPN 登录异常"
     if "media" in text and any(token in text for token in ("github api", "422", "403")):
         return "GitHub media 上传或清理失败"
@@ -101,11 +103,14 @@ def build_report() -> tuple[str, str]:
     run_url = _env("RUN_URL")
     commit = _env("COMMIT_SHA", "unknown")[:12]
     event = _env("EVENT_NAME", "unknown")
+    alert_type = _env("ALERT_TYPE", "failure").lower()
     raw_log = _tail(_env("FAILURE_LOG"))
     category = classify_failure(stage, raw_log)
     excerpt = sanitize(raw_log) or "失败步骤没有可读取的本地日志，请查看运行链接。"
-    subject = f"[FiCS][FAILED] {workflow} - {category}"
+    prefix = "DEFERRED" if alert_type == "deferred" else "FAILED"
+    subject = f"[FiCS][{prefix}] {workflow} - {category}"
     body = "\n".join((
+        f"Run status: {alert_type}",
         f"Workflow: {workflow}",
         f"Job: {job}",
         f"Event: {event}",

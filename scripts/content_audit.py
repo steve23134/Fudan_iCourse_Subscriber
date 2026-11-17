@@ -19,6 +19,7 @@ from main import (  # noqa: E402
     _check_session,
     is_transient_login_error,
     login_with_retry,
+    mark_workflow_deferred,
 )
 from src.ai.summarizer import Summarizer  # noqa: E402
 from src.ai.transcriber import Transcriber  # noqa: E402
@@ -229,6 +230,10 @@ def main() -> None:
             vpn = login_with_retry()
         except Exception as exc:
             if is_transient_login_error(exc):
+                mark_workflow_deferred(
+                    f"Content audit login temporarily unavailable: "
+                    f"{type(exc).__name__}: {exc}"
+                )
                 reporter.info(
                     f"[Audit] iCourse login unavailable; deferring this "
                     f"window: {type(exc).__name__}: {exc}"
