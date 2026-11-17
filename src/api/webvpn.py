@@ -20,6 +20,42 @@ import base64
 from src.runtime import config
 
 
+def _second_module_codes(second: object) -> list[str]:
+    """Extract safe secondary-authentication module names from IDP data."""
+    if not isinstance(second, dict):
+        return []
+    codes = second.get("moduleCodes") or second.get("moduleCode") or []
+    if isinstance(codes, str):
+        return [codes]
+    if isinstance(codes, list):
+        return [str(code) for code in codes if code]
+    return []
+
+
+def auth_response_diagnostic(data: object, http_status: int | None = None) -> dict:
+    """Return useful IDP response metadata without credentials or tokens."""
+    if not isinstance(data, dict):
+        return {
+            "http_status": http_status,
+            "response_type": type(data).__name__,
+        }
+    second = data.get("second")
+    return {
+        "http_status": http_status,
+        "code": data.get("code"),
+        "status": data.get("status"),
+        "message": data.get("message") or data.get("msg"),
+        "top_level_keys": sorted(str(key) for key in data),
+        "has_login_token": bool(data.get("loginToken")),
+        "has_second": bool(second),
+        "second_module_codes": _second_module_codes(second),
+    }
+
+
+class SecondaryAuthRequired(RuntimeError):
+    """IDP accepted the password but requires another authentication step."""
+
+
 def encrypt_host(hostname: str) -> str:
     """Encrypt hostname using AES-128-CFB for WebVPN URL encoding.
 
@@ -119,6 +155,7 @@ class WebVPNSession:
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": config.USER_AGENT})
         self.logged_in = False
+        self.last_auth_diagnostic: dict = {}
 
     def login(self, student_id: str = None, password: str = None) -> bool:
         """Execute the full 7-step IDP authentication flow.
@@ -219,9 +256,11 @@ class WebVPNSession:
             if m:
                 lck = m.group(1)
         if not lck:
+            final = urlparse(resp.url)
             raise RuntimeError(
                 f"Failed to extract lck from CAS redirect chain "
-                f"(final URL: {resp.url[:120]})"
+                f"(status={resp.status_code}, host={final.hostname}, "
+                f"path={final.path})"
             )
 
         entity_id = config.ICOURSE_BASE
@@ -296,16 +335,45 @@ class WebVPNSession:
             },
             timeout=60,
         )
-        data = resp.json()
+        try:
+            data = resp.json()
+        except ValueError:
+            self.last_auth_diagnostic = {
+                "http_status": resp.status_code,
+                "response_type": "non-json",
+                "content_type": resp.headers.get("Content-Type", ""),
+                "content_length": len(resp.content),
+            }
+            raise RuntimeError(
+                f"iCourse CAS returned non-JSON "
+                f"(status={resp.status_code}, length={len(resp.content)})"
+            )
+
+        self.last_auth_diagnostic = auth_response_diagnostic(
+            data, http_status=resp.status_code,
+        )
 
         if str(data.get("code")) != "200":
             raise RuntimeError(
                 f"iCourse CAS auth failed (code={data.get('code')})"
             )
 
+        second = data.get("second")
+        if second:
+            modules = _second_module_codes(second)
+            detail = ",".join(modules) if modules else "unknown"
+            raise SecondaryAuthRequired(
+                f"iCourse CAS requires secondary authentication "
+                f"(modules={detail})"
+            )
+
         login_token = data.get("loginToken", "")
         if not login_token:
-            raise RuntimeError("No loginToken in iCourse CAS response")
+            keys = ",".join(self.last_auth_diagnostic["top_level_keys"])
+            raise RuntimeError(
+                f"No loginToken in iCourse CAS response "
+                f"(top-level keys={keys})"
+            )
         print("    loginToken: OK")
 
         # Step 6: Get CAS ticket (through WebVPN)
