@@ -32,4 +32,5 @@ jobs:
         env:
           StuId: ${{ secrets.STUID }}
           UISPsw: ${{ secrets.UISPSW }}
+          ICOURSE_SESSION_COOKIE: ${{ secrets.ICOURSE_SESSION_COOKIE }}
         run: python -u scripts/login_probe.py

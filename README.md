@@ -35,6 +35,7 @@
 |---|---|---|---|
 | `STUID` | ✅ | 复旦学号 | `22307110000` |
 | `UISPSW` | ✅ | UIS 统一身份认证密码 | `your_password` |
+| `ICOURSE_SESSION_COOKIE` | ⚠️ | 复旦 IDP 要求二次认证时使用；由浏览器一次性授权后生成 | `base64:...` |
 | `COURSE_IDS` | ✅ | 要监控的课程 ID，多个用英文逗号分隔 | `35472,30251` |
 | `DASHSCOPE_API_KEY` | ⬜ | ModelScope 平台 API Key | `ms-xxxxxxxx` |
 | `DEEPSEEK_API_KEY` | ⬜ | DeepSeek API Key（推荐） | `sk-xxxxxxxx` |
@@ -44,6 +45,35 @@
 | `RECEIVER_EMAIL` | ✅ | 接收摘要邮件的邮箱 | `you@m.fudan.edu.com` |
 
 > 至少配置一个 LLM API Key（DASHSCOPE、DEEPSEEK 或 GEMINI）。程序按配置顺序自动回退尝试。如果需要选择其他的LLM供应商，可以在`src\runtime\config.py`路径下自定义供应商。
+
+### 二次认证会话
+
+如果 Login Probe 返回 `SecondaryAuthRequired`，或者 id.fudan.edu.cn 要求
+`qr / 邮箱 / 短信 / OTP`，需要由你完成一次人工认证，再生成可选 Secret
+`ICOURSE_SESSION_COOKIE`。Actions 会优先验证并复用该会话；会话失效后才会
+回退到账号密码登录。
+
+本地使用 Agent Browser 完成授权的示例：
+
+```powershell
+$env:AGENT_BROWSER_SESSION = "fudan-icourse-auth"
+agent-browser --headed open "https://webvpn.fudan.edu.cn/https/77726476706e69737468656265737421f9f44e8935236d1e781d8dad961b2631a501f26f"
+```
+
+在打开的浏览器中自行完成统一身份认证和二次认证。进入 iCourse 后执行：
+
+```powershell
+agent-browser state save "F:\Code\Codex\icourse-state.json"
+agent-browser close
+python scripts/export_session_cookie.py `
+  --state "F:\Code\Codex\icourse-state.json" `
+  --output "F:\Code\Codex\session_cookie_secret.txt"
+```
+
+将 `session_cookie_secret.txt` 的内容保存为 Repository Secret
+`ICOURSE_SESSION_COOKIE`，然后运行一次 **Login Probe**。导出脚本只保留
+`*.fudan.edu.cn` Cookie，不会保留 GitHub、邮箱或其他站点的 Cookie；该文件
+已在 `.gitignore` 中排除，不得提交或分享。
 
 ### 第 3 步：获取课程 ID
 

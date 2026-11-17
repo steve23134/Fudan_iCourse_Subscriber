@@ -74,6 +74,7 @@ jobs:
         env:
           StuId: ${{ secrets.STUID }}
           UISPsw: ${{ secrets.UISPSW }}
+          ICOURSE_SESSION_COOKIE: ${{ secrets.ICOURSE_SESSION_COOKIE }}
         run: |
           COURSE_TITLE="${{ inputs.course_title }}"
           LIMIT="${{ inputs.limit }}"

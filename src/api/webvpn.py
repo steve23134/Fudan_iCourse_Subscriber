@@ -7,6 +7,7 @@ Handles:
 """
 
 import html as html_mod
+import os
 import re
 import time
 from binascii import hexlify, unhexlify
@@ -19,6 +20,7 @@ from Crypto.Cipher import PKCS1_v1_5
 import base64
 
 from src.runtime import config
+from src.api.session_cookie import apply_cookie_secret
 
 
 def _second_module_codes(second: object) -> list[str]:
@@ -168,6 +170,30 @@ class WebVPNSession:
         self.logged_in = False
         self.last_auth_diagnostic: dict = {}
         self.last_webvpn_warmup: list[dict] = []
+
+    def restore_saved_session(self) -> int:
+        """Load ICOURSE_SESSION_COOKIE without logging any cookie values."""
+        raw = os.environ.get("ICOURSE_SESSION_COOKIE", "").strip()
+        if not raw:
+            return 0
+        count = apply_cookie_secret(self.session, raw)
+        self.logged_in = True
+        print(f"[Session] Restored {count} authorized Fudan cookie(s).")
+        return count
+
+    def verify_icourse_session(self) -> bool:
+        """Return True only when iCourse accepts the restored session."""
+        test_url = get_vpn_url(
+            f"{config.ICOURSE_BASE}/userapi/v1/infosimple"
+        )
+        resp = self.session.get(test_url, timeout=(10, 60))
+        if resp.status_code != 200:
+            return False
+        try:
+            data = resp.json()
+        except ValueError:
+            return False
+        return data.get("code") in (0, 200)
 
     def login(self, student_id: str = None, password: str = None) -> bool:
         """Execute the full 7-step IDP authentication flow.

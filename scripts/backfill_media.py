@@ -14,29 +14,10 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.api.icourse import ICourseClient, fetch_ppt_image  # noqa: E402
-from src.api.webvpn import WebVPNSession  # noqa: E402
+from src.api.login_retry import login_with_retry  # noqa: E402
 from src.data.database import Database  # noqa: E402
 from src.media.store import MediaStore  # noqa: E402
 from src.runtime import config  # noqa: E402
-
-
-def _login() -> WebVPNSession:
-    last_error = None
-    for attempt in range(1, 8):
-        try:
-            print(f"[Backfill] WebVPN login attempt {attempt}/7", flush=True)
-            vpn = WebVPNSession()
-            vpn.login()
-            vpn.authenticate_icourse()
-            return vpn
-        except Exception as exc:
-            last_error = exc
-            print(
-                f"[Backfill] login failed: {type(exc).__name__}: {exc}",
-                flush=True,
-            )
-            time.sleep(5)
-    raise RuntimeError(f"WebVPN login failed: {last_error}")
 
 
 def main() -> None:
@@ -76,7 +57,7 @@ def main() -> None:
         f"across {len({p['sub_id'] for p in pages})} lecture(s)."
     )
 
-    client = ICourseClient(_login())
+    client = ICourseClient(login_with_retry())
     store = MediaStore(args.media_dir)
     ok = failed = 0
     for index, page in enumerate(pages, start=1):

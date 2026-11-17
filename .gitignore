@@ -38,6 +38,7 @@ _decrypted_dump/
 # Local encryption test artifacts
 _backup_test.gz.enc
 _backup_reencrypted.gz.enc
+session_cookie_secret.txt
 
 docs/*
 !docs/*.png

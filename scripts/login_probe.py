@@ -15,6 +15,7 @@ import requests
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from src.api.session_cookie import SessionCookieError  # noqa: E402
 from src.api.webvpn import WebVPNSession  # noqa: E402
 from src.runtime import config  # noqa: E402
 
@@ -91,11 +92,49 @@ def main() -> int:
 
     report = {
         "started_at": datetime.now(timezone.utc).isoformat(),
-        "public_reachability": _public_reachability(),
+        "public_reachability": [],
+        "saved_session": {
+            "configured": bool(config.ICOURSE_SESSION_COOKIE),
+            "ok": None,
+        },
         "webvpn_login": None,
         "icourse_cas": None,
     }
     vpn = WebVPNSession()
+    if config.ICOURSE_SESSION_COOKIE:
+        try:
+            count = vpn.restore_saved_session()
+            valid = vpn.verify_icourse_session()
+            report["saved_session"] = {
+                "configured": True,
+                "ok": valid,
+                "cookie_count": count,
+            }
+            if valid:
+                print("[Login Probe] " + json.dumps(report, ensure_ascii=False))
+                return 0
+            print("[Login Probe] Saved session expired; trying password flow.")
+        except SessionCookieError as exc:
+            report["saved_session"] = {
+                "configured": True,
+                "ok": False,
+                "exception": type(exc).__name__,
+                "error": sanitize(exc),
+            }
+            print("[Login Probe] " + json.dumps(report, ensure_ascii=False))
+            return 1
+        except Exception as exc:
+            report["saved_session"] = {
+                "configured": True,
+                "ok": False,
+                "exception": type(exc).__name__,
+                "error": sanitize(exc),
+            }
+            print("[Login Probe] " + json.dumps(report, ensure_ascii=False))
+            return 1
+        vpn = WebVPNSession()
+
+    report["public_reachability"] = _public_reachability()
     try:
         vpn.login()
         report["webvpn_login"] = {"ok": True}
