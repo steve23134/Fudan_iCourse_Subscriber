@@ -1,10 +1,15 @@
 name: Login Probe
 
 on:
+  schedule:
+    # GitHub cron is UTC; these are 08:20 and 20:20 Asia/Shanghai.
+    - cron: "20 0 * * *"
+    - cron: "20 12 * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: login-probe
@@ -22,6 +27,9 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Prepare alert logs
+        run: mkdir -p "$RUNNER_TEMP/fics-alert"
+
       - name: Install probe dependencies
         run: |
           python -m ensurepip --upgrade
@@ -32,18 +40,61 @@ jobs:
         env:
           FALLBACK_IP: ${{ vars.ICOURSE_FALLBACK_IP }}
         run: |
+          set -o pipefail
           IP="${FALLBACK_IP:-175.186.248.2}"
-          curl -4 -sS \
-            --connect-timeout 10 \
-            --max-time 30 \
-            --resolve "icourse.fudan.edu.cn:443:${IP}" \
-            -o /dev/null \
-            -w "direct_icourse http=%{http_code} total=%{time_total}s remote=%{remote_ip}\n" \
-            "https://icourse.fudan.edu.cn/"
+          {
+            curl -4 -sS \
+              --connect-timeout 10 \
+              --max-time 30 \
+              --resolve "icourse.fudan.edu.cn:443:${IP}" \
+              -o /dev/null \
+              -w "direct_icourse http=%{http_code} total=%{time_total}s remote=%{remote_ip}\n" \
+              "https://icourse.fudan.edu.cn/"
+          } 2>&1 | tee -a "$RUNNER_TEMP/fics-alert/failure.log"
 
       - name: Run safe login probe
         env:
           StuId: ${{ secrets.STUID }}
           UISPsw: ${{ secrets.UISPSW }}
           UIS_TOTP_SECRET: ${{ secrets.UIS_TOTP_SECRET }}
-        run: python -u scripts/login_probe.py
+        run: |
+          set -o pipefail
+          python -u scripts/login_probe.py \
+            2>&1 | tee -a "$RUNNER_TEMP/fics-alert/failure.log"
+
+      - name: Email action-required monitor
+        if: success()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SMTP_EMAIL: ${{ secrets.SMTP_EMAIL }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_SECURITY: ${{ secrets.SMTP_SECURITY }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          LOOKBACK_HOURS: "13"
+        run: python -u scripts/check_action_required.py
+
+      - name: Email failure alert
+        if: failure()
+        env:
+          SMTP_EMAIL: ${{ secrets.SMTP_EMAIL }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_SECURITY: ${{ secrets.SMTP_SECURITY }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          STUID: ${{ secrets.STUID }}
+          UISPSW: ${{ secrets.UISPSW }}
+          UIS_TOTP_SECRET: ${{ secrets.UIS_TOTP_SECRET }}
+          WORKFLOW_NAME: Login Probe
+          ALERT_TYPE: failure
+          JOB_NAME: ${{ github.job }}
+          EVENT_NAME: ${{ github.event_name }}
+          COMMIT_SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          FAILURE_LOG: ${{ runner.temp }}/fics-alert/failure.log
+          FAILED_STAGE: Login Probe or workflow health monitor
+        run: python scripts/send_failure_email.py

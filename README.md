@@ -162,6 +162,11 @@ https://steve23134.github.io/Fudan_iCourse_Subscriber/#g=<GUEST_ROUTE_SLUG>
 说明 GitHub 因 fork 的 Actions 使用量自动暂停了工作流；即使权限 API 显示
 `enabled: true`，也需要仓库维护者在 Actions 页面点击横幅中的重新启用按钮。
 
+如果运行显示 `action_required`，页面通常会提示 GitHub 认为工作流文件需要
+人工审核。具有仓库写权限的维护者需要打开该次运行，检查 workflow 后点击
+**Approve and run**。Login Probe 每天会自动检查这类被阻塞的运行，并通过
+配置好的 SMTP 邮箱发送说明邮件。
+
 功能介绍：
 - **浏览器端解密**：输入你的凭据，浏览器用 WebCrypto 解密 sql.js 读取 shard 数据库，凭据不离开本地
 - **按课程/课次浏览**：查看每节课的转录和摘要内容
